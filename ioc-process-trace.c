@@ -15,6 +15,8 @@ BPF_PERCPU_ARRAY(retdb_data, dbCommon, 1);
 BPF_PERCPU_ARRAY(pdbent, DBENTRY *, 1);
 BPF_PERCPU_ARRAY(dbent, DBENTRY, 1);
 BPF_PERCPU_ARRAY(recn, dbRecordNode, 1);
+BPF_PERCPU_ARRAY(rectype, dbRecordType, 1);
+BPF_PERCPU_ARRAY(mapdbfld, dbFldDes, 1);
 
 // struct key_t
 //{
@@ -75,25 +77,37 @@ int exit_process(struct pt_regs *ctx)
     // DBENTRY *pent;
     // pent = *ppent;
 
+    // DBENTRY **ppent = pdbent.lookup(&zero);
+
+    // if (!ppent)
+    //     return 0;
+
+    // DBENTRY *ent = dbent.lookup(&zero);
+
+    // if (!ent)
+    //     return 0;
+
+    // size = sizeof(DBENTRY);
+    // if (ent != 0)
+    //     ret = bpf_probe_read_user(ent, size, *ppent);
+
     DBENTRY *ent = dbent.lookup(&zero);
-    //  DBENTRY *ent;
+    ////  DBENTRY *ent;
 
     if (!ent)
     {
-        bpf_trace_printk("ent");
         return 0;
     }
 
     // size = sizeof(DBENTRY);
-    //  if (pent != 0)
-    //  ret = bpf_probe_read_user(ent, size, pent);
+    // if (pent != 0)
+    //     ret = bpf_probe_read_user(ent, size, pent);
 
     dbRecordNode *recnode = recn.lookup(&zero);
     // DBENTRY *ent;
 
     if (!recnode)
     {
-        bpf_trace_printk("recnode");
         return 0;
     }
     // dbRecordNode *recnode;
@@ -102,7 +116,6 @@ int exit_process(struct pt_regs *ctx)
     // bpf_trace_printk("ent: %d", ent->indfield);
     if (ent->precnode != 0)
     {
-        bpf_trace_printk("precnode");
         ret = bpf_probe_read_user(recnode, size, ent->precnode);
     }
 
@@ -110,9 +123,53 @@ int exit_process(struct pt_regs *ctx)
     size = sizeof(name);
     if (recnode->recordname != 0)
     {
-        bpf_trace_printk("recordname");
         ret = bpf_probe_read_user(name, size, recnode->recordname);
-        bpf_trace_printk("exit 1: %s", name);
+        bpf_trace_printk("exit: %s", name);
+    }
+
+    dbRecordType *type = rectype.lookup(&zero);
+    if (!type)
+    {
+        return 0;
+    }
+
+    size = sizeof(dbRecordType);
+    if (ent->precordType != 0)
+    {
+        ret = bpf_probe_read_user(type, size, ent->precordType);
+    }
+
+    dbFldDes *dbfld = mapdbfld.lookup(&zero);
+
+    if (!dbfld)
+    {
+        return 0;
+    }
+    // dbRecordNode *recnode;
+    size = sizeof(dbFldDes);
+
+    // bpf_trace_printk("ent: %d", ent->indfield);
+    // if (ent->pflddes != 0)
+    if (type->pvalFldDes != 0)
+    {
+        // ret = bpf_probe_read_user(dbfld, size, ent->pflddes);
+        ret = bpf_probe_read_user(dbfld, size, type->pvalFldDes);
+        bpf_trace_printk("exit: %d", dbfld->field_type);
+    }
+
+    char fname[10];
+    size = sizeof(name);
+    if (dbfld->name != 0)
+    {
+        ret = bpf_probe_read_user(fname, size, dbfld->name);
+        bpf_trace_printk("exit: %s", fname);
+    }
+
+    __u32 val;
+    if (precord != 0)
+    {
+        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
+        bpf_trace_printk("exit val: %d", val);
     }
 
     return 0;
