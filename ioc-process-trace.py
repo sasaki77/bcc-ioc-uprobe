@@ -16,6 +16,17 @@ libpath = args.libpath
 b = BPF(src_file="ioc-process-trace.c", debug=0)
 b.attach_uprobe(
     name=libpath,
+    sym="dbCreateRecord",
+    fn_name="enter_createrec",
+)
+b.attach_uretprobe(
+    name=libpath,
+    sym="dbCreateRecord",
+    fn_name="exit_createrec",
+)
+
+b.attach_uprobe(
+    name=libpath,
     sym="dbProcess",
     fn_name="enter_process",
 )

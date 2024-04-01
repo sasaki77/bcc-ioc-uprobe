@@ -343,3 +343,104 @@ typedef struct dbFldDes
     /*The following are only available on run time system*/
     unsigned short offset; /*Offset in bytes from beginning of record*/
 } dbFldDes;
+
+struct rset
+{                          /* record support entry table */
+    long number;           /*number of support routines*/
+    long (*report)();      /*print report              */
+    long (*init)();        /*init support              */
+    long (*init_record)(); /*init record               */
+    long (*process)();     /*process record            */
+    long (*special)();     /*special processing        */
+    long (*get_value)();   /*no longer used            */
+    long (*cvt_dbaddr)();  /*cvt  dbAddr               */
+    long (*get_array_info)();
+    long (*put_array_info)();
+    long (*get_units)();
+    long (*get_precision)();
+    long (*get_enum_str)();  /*get string from enum item */
+    long (*get_enum_strs)(); /*get all enum strings      */
+    long (*put_enum_str)();  /*put string from enum item */
+    long (*get_graphic_double)();
+    long (*get_control_double)();
+    long (*get_alarm_double)();
+};
+
+typedef struct rset rset;
+
+typedef struct dbRecordType
+{
+    ELLNODE node;
+    ELLLIST attributeList; /*LIST head of attributes*/
+    ELLLIST recList;       /*LIST head of sorted dbRecordNodes*/
+    ELLLIST devList;       /*List of associated device support*/
+    ELLLIST cdefList;      /*LIST of Cdef text items*/
+    char *name;
+    short no_fields;       /* number of fields defined     */
+    short no_prompt;       /* number of fields to configure*/
+    short no_links;        /* number of links              */
+    short no_aliases;      /* number of aliases in recList */
+    short *link_ind;       /* addr of array of ind in papFldDes*/
+    char **papsortFldName; /* ptr to array of ptr to fld names*/
+    short *sortFldInd;     /* addr of array of ind in papFldDes*/
+    dbFldDes *pvalFldDes;  /*pointer dbFldDes for VAL field*/
+    short indvalFlddes;    /*ind in papFldDes*/
+    dbFldDes **papFldDes;  /* ptr to array of ptr to fldDes*/
+    /*The following are only available on run time system*/
+    rset *prset;
+    int rec_size; /*record size in bytes          */
+} dbRecordType;
+
+struct dbPvd;  /* Contents private to dbPvdLib code */
+struct gphPvt; /* Contents private to gpHashLib code */
+
+typedef struct dbBase
+{
+    ELLLIST menuList;
+    ELLLIST recordTypeList;
+    ELLLIST drvList;
+    ELLLIST linkList;
+    ELLLIST registrarList;
+    ELLLIST functionList;
+    ELLLIST variableList;
+    ELLLIST bptList;
+    ELLLIST filterList;
+    ELLLIST guiGroupList;
+    void *pathPvt;
+    struct dbPvd *ppvd;
+    struct gphPvt *pgpHash;
+    short ignoreMissingMenus;
+    short loadCdefs;
+} dbBase;
+
+typedef dbBase DBBASE;
+
+typedef struct dbRecordNode
+{
+    ELLNODE node;
+    void *precord;
+    char *recordname;
+    ELLLIST infoList; /*LIST head of info nodes*/
+    int flags;
+    struct dbRecordNode *aliasedRecnode; /* NULL unless flags|DBRN_FLAGS_ISALIAS */
+} dbRecordNode;
+
+typedef struct dbInfoNode
+{ /*non-field per-record information*/
+    ELLNODE node;
+    char *name;
+    char *string;
+    void *pointer;
+} dbInfoNode;
+
+typedef struct dbEntry
+{
+    DBBASE *pdbbase;
+    dbRecordType *precordType;
+    dbFldDes *pflddes;
+    dbRecordNode *precnode;
+    dbInfoNode *pinfonode;
+    void *pfield;
+    char *message;
+    short indfield;
+} DBENTRY;
