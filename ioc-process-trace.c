@@ -8,12 +8,12 @@
 
 BPF_PERCPU_ARRAY(db_data, dbCommon, 1);
 BPF_PERCPU_ARRAY(retdb_data, dbCommon, 1);
+
 // BPF_PERCPU_ARRAY(dbent, DBENTRY, 1);
 //  BPF_ARRAY(ex1, int, 1024);
 //  BPF_ARRAY(ex2, int, 1024);
 //  BPF_HASH_OF_MAPS(maps_hash, struct custom_key, "ex1", 10);
-BPF_PERCPU_ARRAY(pdbent, DBENTRY *, 1);
-BPF_PERCPU_ARRAY(dbent, DBENTRY, 1);
+
 BPF_PERCPU_ARRAY(recn, dbRecordNode, 1);
 BPF_PERCPU_ARRAY(rectype, dbRecordType, 1);
 BPF_PERCPU_ARRAY(mapdbfld, dbFldDes, 1);
@@ -156,7 +156,8 @@ int exit_process(struct pt_regs *ctx)
 int enter_createrec(struct pt_regs *ctx)
 {
     int ret;
-    char name[41];
+    char name[61];
+    __u32 zero = 0;
 
     if (!PT_REGS_PARM1(ctx))
         return 0;
@@ -173,28 +174,13 @@ int enter_createrec(struct pt_regs *ctx)
         ret = bpf_probe_read_user(name, size, pname);
 
     struct key_t key;
-    bpf_trace_printk("key.name %d", key.name[19]);
     size = sizeof(key.name);
     if (pname != 0)
         ret = bpf_probe_read_user(key.name, size, pname);
 
     bpf_trace_printk("enter create: %s", name);
-    __u32 zero = 0;
 
-    DBENTRY **data = pdbent.lookup(&zero);
-
-    if (!data)
-        return 0;
-
-    size = sizeof(DBENTRY *);
-    if (pent != 0)
-    {
-        *data = pent;
-        bpf_trace_printk("pent %d", data);
-    }
-    bpf_trace_printk("key.name %d", key.name[19]);
     int flag = 0;
-    bpf_trace_printk("key.name %d", key.name[19]);
     for (int i = 0; i < sizeof(key.name); i++)
     {
         if (flag == 1)
@@ -208,29 +194,6 @@ int enter_createrec(struct pt_regs *ctx)
     }
 
     pv_table.update(&key, &pent);
-
-    return 0;
-};
-
-int exit_createrec(struct pt_regs *ctx)
-{
-    __u32 zero = 0;
-
-    DBENTRY **ppent = pdbent.lookup(&zero);
-
-    if (!ppent)
-        return 0;
-
-    DBENTRY *pent = dbent.lookup(&zero);
-
-    if (!pent)
-        return 0;
-
-    int size = sizeof(DBENTRY);
-    int ret;
-    if (pent != 0)
-        ret = bpf_probe_read_user(pent, size, *ppent);
-    bpf_trace_printk("exit create: %d", pent->pflddes);
 
     return 0;
 };
