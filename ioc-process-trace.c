@@ -1,19 +1,8 @@
 #include <linux/ptrace.h>
 #include "epicsStructure.h"
 
-// https://docs.kernel.org/bpf/map_of_maps.html
-// When creating an outer map, an inner map instance is used to initialize the metadata that
-// the outer map holds about its inner maps. This inner map has a separate lifetime from the
-// outer map and can be deleted after the outer map has been created.
-
 BPF_PERCPU_ARRAY(db_data, dbCommon, 1);
 BPF_PERCPU_ARRAY(retdb_data, dbCommon, 1);
-
-// BPF_PERCPU_ARRAY(dbent, DBENTRY, 1);
-//  BPF_ARRAY(ex1, int, 1024);
-//  BPF_ARRAY(ex2, int, 1024);
-//  BPF_HASH_OF_MAPS(maps_hash, struct custom_key, "ex1", 10);
-
 BPF_PERCPU_ARRAY(recn, dbRecordNode, 1);
 BPF_PERCPU_ARRAY(rectype, dbRecordType, 1);
 BPF_PERCPU_ARRAY(mapdbfld, dbFldDes, 1);
@@ -40,6 +29,8 @@ struct key_proc_pv
 
 BPF_HASH(process_hash, __u64, struct process_info);
 BPF_HASH(proc_pv_hash, struct key_proc_pv, dbCommon *);
+
+BPF_ARRAY(temp, double, 1);
 
 int enter_process(struct pt_regs *ctx)
 {
@@ -112,7 +103,6 @@ int exit_process(struct pt_regs *ctx)
     key_pv.count = pproc_info->count;
 
     struct dbCommon **pprecord;
-    struct dbCommon *precord;
     pprecord = proc_pv_hash.lookup(&key_pv);
 
     if (!pprecord)
@@ -120,6 +110,7 @@ int exit_process(struct pt_regs *ctx)
         return 0;
     }
 
+    struct dbCommon *precord;
     precord = *pprecord;
 
     proc_pv_hash.delete(&key_pv);
@@ -212,8 +203,11 @@ int exit_process(struct pt_regs *ctx)
     if (type->pvalFldDes != 0)
     {
         ret = bpf_probe_read_user(dbfld, size, type->pvalFldDes);
-        bpf_trace_printk("exit: %d", dbfld->field_type);
     }
+
+    double *t = temp.lookup(&zero);
+    if (!t)
+        return 0;
 
     char fname[10];
     size = sizeof(name);
@@ -223,11 +217,81 @@ int exit_process(struct pt_regs *ctx)
         bpf_trace_printk("exit: %s", fname);
     }
 
-    __u32 val;
+    int field_type = dbfld->field_type;
+    bpf_trace_printk("field: %d", field_type);
+
     if (precord != 0)
     {
-        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
-        bpf_trace_printk("exit val: %d", val);
+        switch (field_type)
+        {
+        case DBF_CHAR:
+        {
+            __s8 val;
+            ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
+            bpf_trace_printk("exit val: %d", val);
+            break;
+        }
+        case DBF_SHORT:
+        {
+            __s16 val;
+            ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
+            bpf_trace_printk("exit val: %d", val);
+            break;
+        }
+        case DBF_LONG:
+        {
+            __s32 val;
+            ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
+            bpf_trace_printk("exit val: %d", val);
+            break;
+        }
+        case DBF_INT64:
+        {
+            __s64 val;
+            ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
+            bpf_trace_printk("exit val: %d", val);
+            break;
+        }
+        case DBF_UCHAR:
+        {
+            __u8 val;
+            ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
+            bpf_trace_printk("exit val: %d", val);
+            break;
+        }
+        case DBF_USHORT:
+        case DBF_ENUM:
+        {
+            __u16 val;
+            ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
+            bpf_trace_printk("exit val: %d", val);
+            break;
+        }
+        case DBF_ULONG:
+        {
+            __u32 val;
+            ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
+            bpf_trace_printk("exit val: %d", val);
+            break;
+        }
+        case DBF_UINT64:
+        {
+            __u64 val;
+            ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
+            bpf_trace_printk("exit val: %d", val);
+            break;
+        }
+        case DBF_FLOAT:
+        case DBF_DOUBLE:
+        {
+            double val;
+            ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
+            bpf_trace_printk("exit val: %d", val);
+            break;
+        }
+        default:
+            break;
+        }
     }
 
     return 0;
