@@ -23,8 +23,23 @@ struct key_t
     char name[61];
 };
 
-BPF_STACK(rec_stack, dbCommon *, 1024);
-BPF_HASH(pv_table, struct key_t, DBENTRY *);
+BPF_HASH(pv_entry_hash, struct key_t, DBENTRY *);
+
+struct process_info
+{
+    __u32 id;
+    __u32 count;
+};
+
+struct key_proc_pv
+{
+    __u64 pid;
+    __u32 id;
+    __u32 count;
+};
+
+BPF_HASH(process_hash, __u64, struct process_info);
+BPF_HASH(proc_pv_hash, struct key_proc_pv, dbCommon *);
 
 int enter_process(struct pt_regs *ctx)
 {
@@ -45,7 +60,32 @@ int enter_process(struct pt_regs *ctx)
         ret = bpf_probe_read_user(data, size, precord);
 
     bpf_trace_printk("enter: %s %d %d", data->name, data->time.secPastEpoch, data->time.nsec);
-    rec_stack.push(&precord, 0);
+
+    struct process_info proc_info = {0, 0};
+    struct process_info *pproc_info;
+    struct key_proc_pv key;
+    __u64 pid = bpf_get_current_pid_tgid();
+
+    pproc_info = process_hash.lookup(&pid);
+
+    if (!pproc_info)
+    {
+        __u32 random_id = bpf_get_prandom_u32();
+        proc_info.id = random_id;
+    }
+    else
+    {
+        proc_info.count = pproc_info->count;
+        proc_info.id = pproc_info->id;
+    }
+    proc_info.count = proc_info.count + 1;
+
+    key.pid = pid;
+    key.id = proc_info.id;
+    key.count = proc_info.count;
+
+    process_hash.update(&pid, &proc_info);
+    proc_pv_hash.update(&key, &precord);
 
     return 0;
 };
@@ -55,8 +95,51 @@ int exit_process(struct pt_regs *ctx)
     int ret;
     __u32 zero = 0;
 
+    struct process_info proc_info = {0, 0};
+    struct process_info *pproc_info;
+    struct key_proc_pv key_pv;
+    __u64 pid = bpf_get_current_pid_tgid();
+
+    pproc_info = process_hash.lookup(&pid);
+
+    if (!pproc_info)
+    {
+        return 0;
+    }
+
+    key_pv.pid = pid;
+    key_pv.id = pproc_info->id;
+    key_pv.count = pproc_info->count;
+
+    struct dbCommon **pprecord;
     struct dbCommon *precord;
-    rec_stack.pop(&precord);
+    pprecord = proc_pv_hash.lookup(&key_pv);
+
+    if (!pprecord)
+    {
+        return 0;
+    }
+
+    precord = *pprecord;
+
+    proc_pv_hash.delete(&key_pv);
+
+    if (pproc_info != 0)
+    {
+        proc_info.count = pproc_info->count;
+        proc_info.id = pproc_info->id;
+        proc_info.count = proc_info.count - 1;
+        if (proc_info.count == 0)
+        {
+            process_hash.delete(&pid);
+        }
+        else
+        {
+            process_hash.update(&pid, &proc_info);
+        }
+    }
+
+    process_hash.update(&pid, &proc_info);
 
     dbCommon *data = retdb_data.lookup(&zero);
     if (!data)
@@ -70,14 +153,11 @@ int exit_process(struct pt_regs *ctx)
     struct key_t key;
     memcpy(key.name, data->name, sizeof(key.name));
     bpf_trace_printk("%s", key.name);
-    bpf_trace_printk("%d", key.name[19]);
 
-    DBENTRY **pent = pv_table.lookup(&key);
+    DBENTRY **pent = pv_entry_hash.lookup(&key);
 
     if (!pent)
     {
-        bpf_trace_printk("pent");
-        bpf_trace_printk("%d", pent);
         return 0;
     }
 
@@ -101,7 +181,7 @@ int exit_process(struct pt_regs *ctx)
         ret = bpf_probe_read_user(recnode, size, ent->precnode);
     }
 
-    char name[41];
+    char name[61];
     size = sizeof(name);
     if (recnode->recordname != 0)
     {
@@ -193,7 +273,7 @@ int enter_createrec(struct pt_regs *ctx)
         }
     }
 
-    pv_table.update(&key, &pent);
+    pv_entry_hash.update(&key, &pent);
 
     return 0;
 };
