@@ -19,11 +19,11 @@ b.attach_uprobe(
     sym="dbCreateRecord",
     fn_name="enter_createrec",
 )
-# b.attach_uretprobe(
-#    name=libpath,
-#    sym="dbCreateRecord",
-#    fn_name="exit_createrec",
-# )
+b.attach_uretprobe(
+    name=libpath,
+    sym="dbCreateRecord",
+    fn_name="exit_createrec",
+)
 
 b.attach_uprobe(
     name=libpath,

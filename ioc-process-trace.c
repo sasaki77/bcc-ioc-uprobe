@@ -12,7 +12,15 @@ struct key_t
     char name[61];
 };
 
-BPF_HASH(pv_entry_hash, struct key_t, DBENTRY *);
+struct create_rec_args
+{
+    struct key_t key;
+    DBENTRY *pentry;
+};
+
+BPF_PERCPU_ARRAY(dbent, struct create_rec_args, 1);
+
+BPF_HASH(pv_entry_hash, struct key_t, DBENTRY);
 
 struct process_info
 {
@@ -145,14 +153,7 @@ int exit_process(struct pt_regs *ctx)
     memcpy(key.name, data->name, sizeof(key.name));
     bpf_trace_printk("%s", key.name);
 
-    DBENTRY **pent = pv_entry_hash.lookup(&key);
-
-    if (!pent)
-    {
-        return 0;
-    }
-
-    DBENTRY *ent = *pent;
+    DBENTRY *ent = pv_entry_hash.lookup(&key);
 
     if (!ent)
     {
@@ -300,7 +301,6 @@ int exit_process(struct pt_regs *ctx)
 int enter_createrec(struct pt_regs *ctx)
 {
     int ret;
-    char name[61];
     __u32 zero = 0;
 
     if (!PT_REGS_PARM1(ctx))
@@ -313,31 +313,53 @@ int enter_createrec(struct pt_regs *ctx)
 
     char *pname = (char *)PT_REGS_PARM2(ctx);
 
-    int size = sizeof(name);
-    if (pname != 0)
-        ret = bpf_probe_read_user(name, size, pname);
+    struct create_rec_args *ent = dbent.lookup(&zero);
 
-    struct key_t key;
-    size = sizeof(key.name);
-    if (pname != 0)
-        ret = bpf_probe_read_user(key.name, size, pname);
+    if (!ent)
+        return 0;
+    ent->pentry = pent;
 
-    bpf_trace_printk("enter create: %s", name);
+    int size = sizeof(ent->key.name);
+    if (pname != 0)
+        ret = bpf_probe_read_user(ent->key.name, size, pname);
+
+    bpf_trace_printk("enter create: %s", ent->key.name);
 
     int flag = 0;
-    for (int i = 0; i < sizeof(key.name); i++)
+    for (int i = 0; i < sizeof(ent->key.name); i++)
     {
         if (flag == 1)
         {
-            key.name[i] = 0;
+            ent->key.name[i] = 0;
         }
-        if (key.name[i] == 0)
+        if (ent->key.name[i] == 0)
         {
             flag = 1;
         }
     }
 
-    pv_entry_hash.update(&key, &pent);
+    return 0;
+};
+
+int exit_createrec(struct pt_regs *ctx)
+{
+    __u32 zero = 0;
+
+    struct create_rec_args *pent;
+    pent = dbent.lookup(&zero);
+
+    if (!pent)
+        return 0;
+
+    DBENTRY ent;
+
+    int ret;
+    if (pent != 0)
+        ret = bpf_probe_read_user(&ent, sizeof(ent), pent->pentry);
+
+    bpf_trace_printk("exit create");
+
+    pv_entry_hash.update(&(pent->key), &ent);
 
     return 0;
 };
