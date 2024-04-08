@@ -1,4 +1,5 @@
 #include <linux/ptrace.h>
+#include <linux/sched.h>
 #include "epicsStructure.h"
 
 BPF_PERCPU_ARRAY(db_data, dbCommon, 1);
@@ -40,6 +41,31 @@ BPF_HASH(proc_pv_hash, struct key_proc_pv, dbCommon *);
 
 BPF_ARRAY(temp, double, 1);
 
+BPF_RINGBUF_OUTPUT(ring_buf, 1 << 4);
+
+struct event
+{
+    __u32 type;
+    __u64 pid;
+    char comm[TASK_COMM_LEN];
+    __u32 id;
+    __u32 count;
+    __u32 time_sec;
+    __u32 time_nano;
+    char pvname[61];
+    __u32 val_type;
+    __s64 val_i;
+    __u64 val_u;
+    double val_d;
+};
+
+enum val_type
+{
+    VAL_TYPE_INT = 1,
+    VAL_TYPE_UINT = 2,
+    VAL_TYPE_DOUBLE = 3,
+};
+
 int enter_process(struct pt_regs *ctx)
 {
     int ret;
@@ -70,6 +96,7 @@ int enter_process(struct pt_regs *ctx)
     if (!pproc_info)
     {
         __u32 random_id = bpf_get_prandom_u32();
+        bpf_trace_printk("hello %d", random_id);
         proc_info.id = random_id;
     }
     else
@@ -85,6 +112,22 @@ int enter_process(struct pt_regs *ctx)
 
     process_hash.update(&pid, &proc_info);
     proc_pv_hash.update(&key, &precord);
+
+    struct event e;
+
+    e.type = 0;
+    e.pid = bpf_get_current_pid_tgid();
+    bpf_get_current_comm(&e.comm, sizeof(e.comm));
+    memcpy(e.pvname, data->name, sizeof(e.pvname));
+    e.id = proc_info.id;
+    e.count = proc_info.count;
+    e.time_sec = data->time.secPastEpoch;
+    e.time_nano = data->time.nsec;
+    e.val_i = 0;
+    e.val_u = 0;
+    e.val_d = 0;
+
+    ring_buf.ringbuf_output(&e, sizeof(e), 0);
 
     return 0;
 };
@@ -130,6 +173,7 @@ int exit_process(struct pt_regs *ctx)
         proc_info.count = proc_info.count - 1;
         if (proc_info.count == 0)
         {
+            bpf_trace_printk("trace: %d", proc_info.count);
             process_hash.delete(&pid);
         }
         else
@@ -137,8 +181,6 @@ int exit_process(struct pt_regs *ctx)
             process_hash.update(&pid, &proc_info);
         }
     }
-
-    process_hash.update(&pid, &proc_info);
 
     dbCommon *data = retdb_data.lookup(&zero);
     if (!data)
@@ -173,12 +215,12 @@ int exit_process(struct pt_regs *ctx)
         ret = bpf_probe_read_user(recnode, size, ent->precnode);
     }
 
-    char name[61];
-    size = sizeof(name);
+    char pvname[61];
+    size = sizeof(pvname);
     if (recnode->recordname != 0)
     {
-        ret = bpf_probe_read_user(name, size, recnode->recordname);
-        bpf_trace_printk("exit: %s", name);
+        ret = bpf_probe_read_user(pvname, size, recnode->recordname);
+        bpf_trace_printk("exit: %s", pvname);
     }
 
     dbRecordType *type = rectype.lookup(&zero);
@@ -211,7 +253,7 @@ int exit_process(struct pt_regs *ctx)
         return 0;
 
     char fname[10];
-    size = sizeof(name);
+    size = sizeof(fname);
     if (dbfld->name != 0)
     {
         ret = bpf_probe_read_user(fname, size, dbfld->name);
@@ -220,6 +262,21 @@ int exit_process(struct pt_regs *ctx)
 
     int field_type = dbfld->field_type;
     bpf_trace_printk("field: %d", field_type);
+
+    struct event e;
+
+    e.type = 1;
+    e.pid = bpf_get_current_pid_tgid();
+    bpf_get_current_comm(&e.comm, sizeof(e.comm));
+    memcpy(e.pvname, pvname, sizeof(e.pvname));
+    e.id = proc_info.id;
+    e.count = proc_info.count + 1;
+    e.time_sec = data->time.secPastEpoch;
+    e.time_nano = data->time.nsec;
+    e.val_type = 0;
+    e.val_i = 0;
+    e.val_u = 0;
+    e.val_d = 0;
 
     if (precord != 0)
     {
@@ -230,6 +287,8 @@ int exit_process(struct pt_regs *ctx)
             __s8 val;
             ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
             bpf_trace_printk("exit val: %d", val);
+            e.val_type = VAL_TYPE_INT;
+            e.val_i = (__s64)val;
             break;
         }
         case DBF_SHORT:
@@ -237,6 +296,8 @@ int exit_process(struct pt_regs *ctx)
             __s16 val;
             ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
             bpf_trace_printk("exit val: %d", val);
+            e.val_type = VAL_TYPE_INT;
+            e.val_i = (__s64)val;
             break;
         }
         case DBF_LONG:
@@ -244,6 +305,8 @@ int exit_process(struct pt_regs *ctx)
             __s32 val;
             ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
             bpf_trace_printk("exit val: %d", val);
+            e.val_type = VAL_TYPE_INT;
+            e.val_i = (__s64)val;
             break;
         }
         case DBF_INT64:
@@ -251,6 +314,8 @@ int exit_process(struct pt_regs *ctx)
             __s64 val;
             ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
             bpf_trace_printk("exit val: %d", val);
+            e.val_type = VAL_TYPE_INT;
+            e.val_i = (__s64)val;
             break;
         }
         case DBF_UCHAR:
@@ -258,6 +323,8 @@ int exit_process(struct pt_regs *ctx)
             __u8 val;
             ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
             bpf_trace_printk("exit val: %d", val);
+            e.val_type = VAL_TYPE_UINT;
+            e.val_u = (__u64)val;
             break;
         }
         case DBF_USHORT:
@@ -266,6 +333,8 @@ int exit_process(struct pt_regs *ctx)
             __u16 val;
             ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
             bpf_trace_printk("exit val: %d", val);
+            e.val_type = VAL_TYPE_UINT;
+            e.val_u = (__u64)val;
             break;
         }
         case DBF_ULONG:
@@ -273,6 +342,8 @@ int exit_process(struct pt_regs *ctx)
             __u32 val;
             ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
             bpf_trace_printk("exit val: %d", val);
+            e.val_type = VAL_TYPE_UINT;
+            e.val_u = (__u64)val;
             break;
         }
         case DBF_UINT64:
@@ -280,6 +351,8 @@ int exit_process(struct pt_regs *ctx)
             __u64 val;
             ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
             bpf_trace_printk("exit val: %d", val);
+            e.val_type = VAL_TYPE_UINT;
+            e.val_u = (__u64)val;
             break;
         }
         case DBF_FLOAT:
@@ -288,12 +361,16 @@ int exit_process(struct pt_regs *ctx)
             double val;
             ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
             bpf_trace_printk("exit val: %d", val);
+            e.val_type = VAL_TYPE_DOUBLE;
+            e.val_d = (double)val;
             break;
         }
         default:
             break;
         }
     }
+
+    ring_buf.ringbuf_output(&e, sizeof(e), 0);
 
     return 0;
 };
