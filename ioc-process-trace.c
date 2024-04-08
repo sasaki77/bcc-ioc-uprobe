@@ -8,6 +8,8 @@ BPF_PERCPU_ARRAY(recn, dbRecordNode, 1);
 BPF_PERCPU_ARRAY(rectype, dbRecordType, 1);
 BPF_PERCPU_ARRAY(mapdbfld, dbFldDes, 1);
 
+BPF_PERCPU_ARRAY(dbent_dbl, DBENTRY *, 1);
+
 struct key_t
 {
     char name[61];
@@ -438,5 +440,83 @@ int exit_createrec(struct pt_regs *ctx)
 
     pv_entry_hash.update(&(pent->key), &ent);
 
+    return 0;
+};
+
+int enter_dbfirstrecord(struct pt_regs *ctx)
+{
+    int ret;
+    __u32 zero = 0;
+
+    if (!PT_REGS_PARM1(ctx))
+        return 0;
+
+    DBENTRY *pent = (DBENTRY *)PT_REGS_PARM1(ctx);
+
+    DBENTRY **ent = dbent_dbl.lookup(&zero);
+
+    if (!ent)
+        return 0;
+    *ent = pent;
+
+    return 0;
+};
+
+int exit_dbfirstrecord(struct pt_regs *ctx)
+{
+    __u32 zero = 0;
+
+    DBENTRY **ppent = dbent_dbl.lookup(&zero);
+    if (!ppent)
+        return 0;
+    DBENTRY *pent = *ppent;
+
+    if (!pent)
+        return 0;
+
+    DBENTRY ent;
+
+    int ret;
+    if (pent != 0)
+        ret = bpf_probe_read_user(&ent, sizeof(ent), pent);
+
+    dbRecordNode *recnode = recn.lookup(&zero);
+
+    if (!recnode)
+    {
+        return 0;
+    }
+    int size = sizeof(dbRecordNode);
+
+    if (ent.precnode != 0)
+    {
+        ret = bpf_probe_read_user(recnode, size, ent.precnode);
+    }
+
+    char pvname[61];
+    size = sizeof(pvname);
+    if (recnode->recordname != 0)
+    {
+        ret = bpf_probe_read_user(pvname, size, recnode->recordname);
+        bpf_trace_printk("dbl: %s", pvname);
+    }
+
+    struct key_t key;
+    memcpy(key.name, pvname, sizeof(key.name));
+
+    int flag = 0;
+    for (int i = 0; i < sizeof(key.name); i++)
+    {
+        if (flag == 1)
+        {
+            key.name[i] = 0;
+        }
+        if (key.name[i] == 0)
+        {
+            flag = 1;
+        }
+    }
+
+    pv_entry_hash.update(&key, &ent);
     return 0;
 };
