@@ -48,17 +48,25 @@ BPF_RINGBUF_OUTPUT(ring_buf, 1 << 4);
 struct event
 {
     __u32 type;
-    __u64 pid;
+    __u32 pid;
     char comm[TASK_COMM_LEN];
+    __u64 ktime_ns;
+    __u32 state;
     __u32 id;
     __u32 count;
-    __u32 time_sec;
-    __u32 time_nano;
+    __u32 ts_sec;
+    __u32 ts_nano;
     char pvname[61];
     __u32 val_type;
     __s64 val_i;
     __u64 val_u;
     double val_d;
+};
+
+enum state_type
+{
+    STATE_ENTER_PROC = 1,
+    STATE_EXIT_PROC = 2,
 };
 
 enum val_type
@@ -120,11 +128,13 @@ int enter_process(struct pt_regs *ctx)
     e.type = 0;
     e.pid = bpf_get_current_pid_tgid();
     bpf_get_current_comm(&e.comm, sizeof(e.comm));
+    e.ktime_ns = bpf_ktime_get_ns();
+    e.state = STATE_ENTER_PROC;
     memcpy(e.pvname, data->name, sizeof(e.pvname));
     e.id = proc_info.id;
     e.count = proc_info.count;
-    e.time_sec = data->time.secPastEpoch;
-    e.time_nano = data->time.nsec;
+    e.ts_sec = data->time.secPastEpoch;
+    e.ts_nano = data->time.nsec;
     e.val_i = 0;
     e.val_u = 0;
     e.val_d = 0;
@@ -270,11 +280,13 @@ int exit_process(struct pt_regs *ctx)
     e.type = 1;
     e.pid = bpf_get_current_pid_tgid();
     bpf_get_current_comm(&e.comm, sizeof(e.comm));
+    e.ktime_ns = bpf_ktime_get_ns();
+    e.state = STATE_EXIT_PROC;
     memcpy(e.pvname, pvname, sizeof(e.pvname));
     e.id = proc_info.id;
     e.count = proc_info.count + 1;
-    e.time_sec = data->time.secPastEpoch;
-    e.time_nano = data->time.nsec;
+    e.ts_sec = data->time.secPastEpoch;
+    e.ts_nano = data->time.nsec;
     e.val_type = 0;
     e.val_i = 0;
     e.val_u = 0;

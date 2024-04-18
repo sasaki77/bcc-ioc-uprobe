@@ -1,9 +1,13 @@
 #!/usr/bin/python3
 
 from __future__ import print_function
-from bcc import BPF
 from os import getpid
 import argparse
+import ctypes as ct
+import time
+import sys
+
+from bcc import BPF
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument(
@@ -48,9 +52,8 @@ b.attach_uretprobe(
 )
 
 # header
-print("%-18s %-16s %-6s %s" % ("TIME(s)", "COMM", "PID", "MSG"))
+# print("%-18s %-16s %-6s %s" % ("TIME(s)", "COMM", "PID", "MSG"))
 
-import ctypes as ct
 
 # The structure is defined manually in this program.
 # BCC can cast the automatically, but double is not supported.
@@ -62,12 +65,14 @@ TASK_COMM_LEN = 16  # linux/sched.h
 class Data(ct.Structure):
     _fields_ = [
         ("type", ct.c_int),
-        ("pid", ct.c_ulonglong),
+        ("pid", ct.c_uint),
         ("comm", ct.c_char * TASK_COMM_LEN),
+        ("ktime_ns", ct.c_ulonglong),
+        ("state", ct.c_uint),
         ("id", ct.c_uint),
         ("count", ct.c_uint),
-        ("time_sec", ct.c_uint),
-        ("time_nano", ct.c_uint),
+        ("ts_sec", ct.c_uint),
+        ("ts_nano", ct.c_uint),
         ("pvname", ct.c_char * 61),
         ("val_type", ct.c_uint),
         ("val_i", ct.c_longlong),
@@ -76,6 +81,11 @@ class Data(ct.Structure):
     ]
 
 
+STATE_ENTER_PROC = 1
+STATE_EXIT_PROC = 2
+
+STATE_DICT = {STATE_ENTER_PROC: '"Enter Process"', STATE_EXIT_PROC: '"Exit Process"'}
+
 VAL_TYPE_INT = 1
 VAL_TYPE_UINT = 2
 VAL_TYPE_DOUBLE = 3
@@ -83,8 +93,11 @@ VAL_TYPE_DOUBLE = 3
 
 def callback(cpu, data, size):
     event = ct.cast(data, ct.POINTER(Data)).contents
+    comm = f'"{event.comm.decode("utf-8")}"'
+    pvname = f'"{event.pvname.decode("utf-8")}"'
+    state = STATE_DICT.get(event.state, "Unknown")
     if event.type == 0:
-        msg = f"pid={event.pid} comm={event.comm} id={event.id} count={event.count} sec={event.time_sec} nano={event.time_nano} pvname={event.pvname.decode('utf-8')}"
+        msg = f"pid={event.pid} comm={comm} time_ns={event.ktime_ns} state={state} id={event.id} count={event.count} ts_sec={event.ts_sec} ts_nano={event.ts_nano} pvname={pvname}"
     elif event.type == 1:
         val = 0
         if event.val_type == VAL_TYPE_INT:
@@ -93,7 +106,7 @@ def callback(cpu, data, size):
             val = event.val_u
         if event.val_type == VAL_TYPE_DOUBLE:
             val = event.val_d
-        msg = f"pid={event.pid} comm={event.comm} id={event.id} count={event.count} sec={event.time_sec} nano={event.time_nano} pvname={event.pvname.decode('utf-8')} val={val}"
+        msg = f"pid={event.pid} comm={comm} time_ns={event.ktime_ns} state={state} id={event.id} count={event.count} ts_sec={event.ts_sec} ts_nano={event.ts_nano} pvname={pvname} val={val}"
     print(msg)
 
 
@@ -110,8 +123,6 @@ b["ring_buf"].open_ring_buffer(callback)
 #        continue
 #    print("%-18.9f %-16s %-6d %s" % (ts, task, pid, msg))
 
-import time
-import sys
 
 try:
     while 1:
