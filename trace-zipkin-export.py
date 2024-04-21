@@ -86,6 +86,7 @@ b.attach_uretprobe(
 # https://github.com/iovisor/bcc/pull/2198
 
 TASK_COMM_LEN = 16  # linux/sched.h
+MAX_STRING_SIZE = 60
 
 
 class Data(ct.Structure):
@@ -104,6 +105,7 @@ class Data(ct.Structure):
         ("val_i", ct.c_longlong),
         ("val_u", ct.c_ulonglong),
         ("val_d", ct.c_double),
+        ("val_s", ct.c_char * MAX_STRING_SIZE),
     ]
 
 
@@ -115,6 +117,8 @@ STATE_DICT = {STATE_ENTER_PROC: '"Enter Process"', STATE_EXIT_PROC: '"Exit Proce
 VAL_TYPE_INT = 1
 VAL_TYPE_UINT = 2
 VAL_TYPE_DOUBLE = 3
+VAL_TYPE_STRING = 4
+VAL_TYPE_NULL = 5
 
 procs = {}
 BOOT_TIME_NS = int((time.time() - time.monotonic()) * 1e9)
@@ -165,6 +169,10 @@ def export_zipkin_index(proc, index):
         val = exit.val_u
     if exit.val_type == VAL_TYPE_DOUBLE:
         val = exit.val_d
+    if exit.val_type == VAL_TYPE_STRING:
+        val = exit.val_s.decode("utf-8")
+    if exit.val_type == VAL_TYPE_NULL:
+        val = "NULL"
 
     pvname = enter.pvname.decode("utf-8")
     span_name = f"{pvname} ({val})"

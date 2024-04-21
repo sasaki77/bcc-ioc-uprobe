@@ -1,3 +1,5 @@
+#define MAX_STRING_SIZE 40
+
 typedef signed char epicsInt8;
 typedef unsigned char epicsUInt8;
 typedef short epicsInt16;
