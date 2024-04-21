@@ -80,6 +80,9 @@ int enter_process(struct pt_regs *ctx)
 {
     int ret;
     __u32 zero = 0;
+    struct event e;
+
+    e.ktime_ns = bpf_ktime_get_ns();
 
     if (!PT_REGS_PARM1(ctx))
         return 0;
@@ -123,12 +126,9 @@ int enter_process(struct pt_regs *ctx)
     process_hash.update(&pid, &proc_info);
     proc_pv_hash.update(&key, &precord);
 
-    struct event e;
-
     e.type = 0;
     e.pid = bpf_get_current_pid_tgid();
     bpf_get_current_comm(&e.comm, sizeof(e.comm));
-    e.ktime_ns = bpf_ktime_get_ns();
     e.state = STATE_ENTER_PROC;
     memcpy(e.pvname, data->name, sizeof(e.pvname));
     e.id = proc_info.id;
@@ -148,6 +148,9 @@ int exit_process(struct pt_regs *ctx)
 {
     int ret;
     __u32 zero = 0;
+
+    struct event e;
+    e.ktime_ns = bpf_ktime_get_ns();
 
     struct process_info proc_info = {0, 0};
     struct process_info *pproc_info;
@@ -275,12 +278,9 @@ int exit_process(struct pt_regs *ctx)
     int field_type = dbfld->field_type;
     bpf_trace_printk("field: %d", field_type);
 
-    struct event e;
-
     e.type = 1;
     e.pid = bpf_get_current_pid_tgid();
     bpf_get_current_comm(&e.comm, sizeof(e.comm));
-    e.ktime_ns = bpf_ktime_get_ns();
     e.state = STATE_EXIT_PROC;
     memcpy(e.pvname, pvname, sizeof(e.pvname));
     e.id = proc_info.id;
