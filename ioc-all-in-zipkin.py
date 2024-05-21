@@ -16,20 +16,23 @@ from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
     ConsoleSpanExporter,
 )
+from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
 
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 
 from opentelemetry.exporter.zipkin.proto.http import ZipkinExporter
 
 from psutil import boot_time
+from customidgen import CustomIdGen
 
-resource = Resource(attributes={SERVICE_NAME: "your-service-name"})
+
+resource = Resource(attributes={SERVICE_NAME: "process-service"})
 zipkin_exporter = ZipkinExporter(endpoint="http://localhost:9411/api/v2/spans")
 
 # provider = TracerProvider()
 provider = TracerProvider(resource=resource)
-processor = BatchSpanProcessor(ConsoleSpanExporter())
-# processor = BatchSpanProcessor(zipkin_exporter)
+# processor = BatchSpanProcessor(ConsoleSpanExporter())
+processor = BatchSpanProcessor(zipkin_exporter)
 provider.add_span_processor(processor)
 
 # Sets the global default tracer provider
@@ -38,6 +41,15 @@ trace.set_tracer_provider(provider)
 # Creates a tracer from the global tracer provider
 tracer = trace.get_tracer("my.tracer.name")
 
+custom_id_generator = CustomIdGen()
+put_resource = Resource(attributes={SERVICE_NAME: "put-service"})
+put_tracer_provider = TracerProvider(
+    resource=put_resource, id_generator=custom_id_generator
+)
+put_processor = BatchSpanProcessor(zipkin_exporter)
+put_tracer_provider.add_span_processor(put_processor)
+
+put_tracer = trace.get_tracer("tracer.two", tracer_provider=put_tracer_provider)
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument(
@@ -119,6 +131,7 @@ class Data_put(ct.Structure):
         ("ktime_ns", ct.c_ulonglong),
         ("pvname", ct.c_char * 61),
         ("field_name", ct.c_char * 61),
+        ("id", ct.c_uint),
         ("val_type", ct.c_uint),
         ("val_i", ct.c_longlong),
         ("val_u", ct.c_ulonglong),
@@ -161,6 +174,7 @@ def callback_process(cpu, data, size):
         events = proc[event.count - 1]
         events.append(event)
         if event.count == 1:
+            custom_id_generator.set_generate_span_id_arguments(None, None)
             export_zipkin_index(proc, 0)
             del procs[event.id]
 
@@ -194,10 +208,29 @@ def export_zipkin_index(proc, index):
 
     pvname = enter.pvname.decode("utf-8")
     span_name = f"{pvname} ({val})"
+    ctx = None
+
+    if index == 0:
+        rid = enter.id
+        sid = rid | rid << 32
+        tid = sid | sid << 64
+
+        print(rid)
+        print(sid)
+        print(tid)
+        span_context = SpanContext(
+            trace_id=tid,
+            span_id=sid,
+            is_remote=True,
+            trace_flags=TraceFlags(0x01),
+        )
+        ctx = trace.set_span_in_context(NonRecordingSpan(span_context))
+
     with tracer.start_as_current_span(
         span_name,
         start_time=(enter.ktime_ns + BOOT_TIME_NS),
         end_on_exit=False,
+        context=ctx,
     ) as span:
         export_zipkin_index(proc, index + 1)
         ts = int((exit.ts_sec + EPICS_TIME_OFFSET) * 1e9 + exit.ts_nano)
@@ -221,9 +254,25 @@ def callback_put(cpu, data, size):
     if event.val_type == VAL_TYPE_NULL:
         val = "NULL"
 
+    rid = event.id
+    sid = rid | rid << 32
+    tid = sid | sid << 64
+
+    print(rid)
+    print(sid)
+    print(tid)
+    # span_context = SpanContext(
+    #    trace_id=tid,
+    #    span_id=sid,
+    #    is_remote=True,
+    #    trace_flags=TraceFlags(0x01),
+    # )
+    # ctx = trace.set_span_in_context(NonRecordingSpan(span_context))
+
     pvname = event.pvname.decode("utf-8")
     span_name = f"{pvname} ({val})"
-    with tracer.start_as_current_span(
+    custom_id_generator.set_generate_span_id_arguments(tid, sid)
+    with put_tracer.start_as_current_span(
         span_name,
         start_time=(event.ktime_ns + BOOT_TIME_NS),
         end_on_exit=False,
