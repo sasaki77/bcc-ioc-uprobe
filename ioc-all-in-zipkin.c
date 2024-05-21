@@ -88,6 +88,7 @@ BPF_PERCPU_ARRAY(db_data_put, dbAddr, 1);
 struct event_put
 {
     __u64 ktime_ns;
+    __u64 ktime_ns_end;
     char pvname[61];
     char field_name[61];
     __u32 id;
@@ -105,7 +106,7 @@ struct put_pv
     char name[61];
     __u32 id;
 };
-BPF_HASH(put_pv_hash, __u64, struct put_pv);
+BPF_HASH(put_pv_hash, __u64, struct event_put);
 
 int enter_dbput(struct pt_regs *ctx, void *paddr, short dbrType, void *pbuffer, long nRequest)
 {
@@ -231,13 +232,10 @@ int enter_dbput(struct pt_regs *ctx, void *paddr, short dbrType, void *pbuffer, 
     __u32 random_id = bpf_get_prandom_u32();
     e.id = random_id;
 
-    ring_buf_put.ringbuf_output(&e, sizeof(struct event_put), 0);
+    // ring_buf_put.ringbuf_output(&e, sizeof(struct event_put), 0);
 
-    struct put_pv p = {};
     __u64 pid = bpf_get_current_pid_tgid();
-    p.id = random_id;
-    memcpy(p.name, e.pvname, sizeof(p.name));
-    put_pv_hash.update(&pid, &p);
+    put_pv_hash.update(&pid, &e);
 
     return 0;
 };
@@ -245,7 +243,17 @@ int enter_dbput(struct pt_regs *ctx, void *paddr, short dbrType, void *pbuffer, 
 int exit_dbput(struct pt_regs *ctx)
 {
     __u64 pid = bpf_get_current_pid_tgid();
+    struct event_put *p = put_pv_hash.lookup(&pid);
+    if (!p)
+    {
+        return 0;
+    }
+
+    p->ktime_ns_end = bpf_ktime_get_ns();
+    ring_buf_put.ringbuf_output(p, sizeof(struct event_put), 0);
+
     put_pv_hash.delete(&pid);
+
     return 0;
 };
 
@@ -285,7 +293,7 @@ int enter_process(struct pt_regs *ctx)
     if (!pproc_info)
     {
         __u32 random_id;
-        struct put_pv *p = put_pv_hash.lookup(&pid);
+        struct event_put *p = put_pv_hash.lookup(&pid);
         if (!p)
         {
             random_id = bpf_get_prandom_u32();

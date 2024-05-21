@@ -46,6 +46,7 @@ put_resource = Resource(attributes={SERVICE_NAME: "put-service"})
 put_tracer_provider = TracerProvider(
     resource=put_resource, id_generator=custom_id_generator
 )
+# put_processor = BatchSpanProcessor(ConsoleSpanExporter())
 put_processor = BatchSpanProcessor(zipkin_exporter)
 put_tracer_provider.add_span_processor(put_processor)
 
@@ -97,6 +98,11 @@ b.attach_uprobe(
     sym="dbPutField",
     fn_name="enter_dbput",
 )
+b.attach_uretprobe(
+    name=libpath,
+    sym="dbPutField",
+    fn_name="exit_dbput",
+)
 
 # The structure is defined manually in this program.
 # BCC can cast the automatically, but double is not supported.
@@ -129,6 +135,7 @@ class Data_process(ct.Structure):
 class Data_put(ct.Structure):
     _fields_ = [
         ("ktime_ns", ct.c_ulonglong),
+        ("ktime_ns_end", ct.c_ulonglong),
         ("pvname", ct.c_char * 61),
         ("field_name", ct.c_char * 61),
         ("id", ct.c_uint),
@@ -215,9 +222,6 @@ def export_zipkin_index(proc, index):
         sid = rid | rid << 32
         tid = sid | sid << 64
 
-        print(rid)
-        print(sid)
-        print(tid)
         span_context = SpanContext(
             trace_id=tid,
             span_id=sid,
@@ -258,18 +262,8 @@ def callback_put(cpu, data, size):
     sid = rid | rid << 32
     tid = sid | sid << 64
 
-    print(rid)
-    print(sid)
-    print(tid)
-    # span_context = SpanContext(
-    #    trace_id=tid,
-    #    span_id=sid,
-    #    is_remote=True,
-    #    trace_flags=TraceFlags(0x01),
-    # )
-    # ctx = trace.set_span_in_context(NonRecordingSpan(span_context))
-
     pvname = event.pvname.decode("utf-8")
+    field_name = event.field_name.decode("utf-8")
     span_name = f"{pvname} ({val})"
     custom_id_generator.set_generate_span_id_arguments(tid, sid)
     with put_tracer.start_as_current_span(
@@ -278,8 +272,9 @@ def callback_put(cpu, data, size):
         end_on_exit=False,
     ) as span:
         span.set_attribute("pv.name", pvname)
+        span.set_attribute("pv.field", field_name)
         span.set_attribute("pv.value", val)
-        span.end(event.ktime_ns + BOOT_TIME_NS)
+        span.end(event.ktime_ns_end + BOOT_TIME_NS)
 
 
 b["ring_buf"].open_ring_buffer(callback_process)
@@ -295,3 +290,13 @@ try:
         time.sleep(0.5)
 except KeyboardInterrupt:
     sys.exit()
+
+# me = getpid()
+# while 1:
+#    try:
+#        (task, pid, cpu, flags, ts, msg) = b.trace_fields()
+#    except ValueError:
+#        continue
+#    if pid == me or msg == "":
+#        continue
+#    print("%-18.9f %-16s %-6d %s" % (ts, task, pid, msg))
