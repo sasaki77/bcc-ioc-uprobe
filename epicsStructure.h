@@ -446,3 +446,70 @@ typedef struct dbEntry
     char *message;
     short indfield;
 } DBENTRY;
+
+typedef void (*dbCaCallback)(void *userPvt);
+
+typedef struct oldChannelNotify *chid;
+typedef struct oldSubscription *evid;
+#define MAX_UNITS_SIZE 8
+
+typedef struct caLink
+{
+    ELLNODE node;
+    int refcount;
+    epicsMutexId lock;
+    struct link *plink;
+    char *pvname;
+    chid chid;
+    short link_action;
+    /* The following have new values after each data event*/
+    epicsEnum16 sevr;
+    epicsEnum16 stat;
+    epicsTimeStamp timeStamp;
+    /* The following have values after connection*/
+    short dbrType;
+    unsigned long elementSize;  /* size of one element in pgetNative */
+    unsigned long nelements;    /* PVs max array size */
+    unsigned long usedelements; /* currently used in pgetNative */
+    unsigned long putnelements; /* currently used in pputNative */
+    char hasReadAccess;
+    char hasWriteAccess;
+    char isConnected;
+    char gotFirstConnection;
+    /* The following are for dbCaAddLinkCallback */
+    dbCaCallback connect;
+    dbCaCallback monitor;
+    void *userPvt;
+    /* The following are for write request */
+    short putType;
+    dbCaCallback putCallback;
+    void *putUserPvt;
+    /* The following are for access to additional attributes*/
+    char gotAttributes;
+    dbCaCallback getAttributes;
+    void *getAttributesPvt;
+    /* The following have values after getAttribEventCallback*/
+    double controlLimits[2];
+    double displayLimits[2];
+    double alarmLimits[4];
+    short precision;
+    char units[MAX_UNITS_SIZE]; /* units of value */
+    /* The following are for handling data*/
+    void *pgetNative;
+    char *pgetString;
+    void *pputNative;
+    char *pputString;
+    evid evidNative;
+    evid evidString;
+    char gotInNative;
+    char gotInString;
+    char gotOutNative;
+    char gotOutString;
+    char newOutNative;
+    char newOutString;
+    unsigned char scanningOnce;
+    /* The following are for dbcar*/
+    unsigned long nDisconnect;
+    unsigned long nNoWrite; /*only modified by dbCaPutLink*/
+    unsigned long nUpdate;
+} caLink;
