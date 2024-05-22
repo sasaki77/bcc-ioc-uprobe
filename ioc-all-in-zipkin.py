@@ -167,10 +167,10 @@ def callback_process(cpu, data, size):
     event = ct.cast(data, ct.POINTER(Data_process)).contents
 
     proc = []
-    if event.id in procs:
-        proc = procs[event.id]
+    if event.pid in procs:
+        proc = procs[event.pid]
     else:
-        procs[event.id] = proc
+        procs[event.pid] = proc
 
     if event.state == STATE_ENTER_PROC:
         events = [event]
@@ -183,7 +183,7 @@ def callback_process(cpu, data, size):
         if event.count == 1:
             custom_id_generator.set_generate_span_id_arguments(None, None)
             export_zipkin_index(proc, 0)
-            del procs[event.id]
+            del procs[event.pid]
 
 
 def export_zipkin_index(proc, index):

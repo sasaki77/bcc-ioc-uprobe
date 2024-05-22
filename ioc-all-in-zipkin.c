@@ -27,14 +27,12 @@ BPF_HASH(pv_entry_hash, struct key_t, DBENTRY);
 
 struct process_info
 {
-    __u32 id;
     __u32 count;
 };
 
 struct key_proc_pv
 {
-    __u64 pid;
-    __u32 id;
+    __u32 pid;
     __u32 count;
 };
 
@@ -44,6 +42,8 @@ BPF_HASH(proc_pv_hash, struct key_proc_pv, dbCommon *);
 BPF_ARRAY(temp, double, 1);
 
 BPF_RINGBUF_OUTPUT(ring_buf, 1 << 4);
+
+#define TASK_COMM_LEN 16
 
 struct event_process
 {
@@ -283,48 +283,43 @@ int enter_process(struct pt_regs *ctx)
 
     bpf_trace_printk("enter: %s %d %d", data->name, data->time.secPastEpoch, data->time.nsec);
 
-    struct process_info proc_info = {0, 0};
+    struct process_info proc_info = {0};
     struct process_info *pproc_info;
     struct key_proc_pv key;
     __u64 pid = bpf_get_current_pid_tgid();
 
     pproc_info = process_hash.lookup(&pid);
 
+    __u32 random_id = bpf_get_prandom_u32();
+    ;
     if (!pproc_info)
     {
-        __u32 random_id;
         struct event_put *p = put_pv_hash.lookup(&pid);
-        if (!p)
-        {
-            random_id = bpf_get_prandom_u32();
-        }
-        else
+        if (p)
         {
             random_id = p->id;
         }
         bpf_trace_printk("hello %d", random_id);
-        proc_info.id = random_id;
     }
     else
     {
         proc_info.count = pproc_info->count;
-        proc_info.id = pproc_info->id;
     }
     proc_info.count = proc_info.count + 1;
 
-    key.pid = pid;
-    key.id = proc_info.id;
+    key.pid = pid >> 32;
     key.count = proc_info.count;
 
     process_hash.update(&pid, &proc_info);
     proc_pv_hash.update(&key, &precord);
+    bpf_trace_printk("enter process: %d %d", key.pid, key.count);
 
     e->type = 0;
     e->pid = bpf_get_current_pid_tgid();
     bpf_get_current_comm(&(e->comm), sizeof(e->comm));
     e->state = STATE_ENTER_PROC;
     memcpy((e->pvname), data->name, sizeof(e->pvname));
-    e->id = proc_info.id;
+    e->id = random_id;
     e->count = proc_info.count;
     e->ts_sec = data->time.secPastEpoch;
     e->ts_nano = data->time.nsec;
@@ -343,12 +338,13 @@ int exit_process(struct pt_regs *ctx)
     __u32 zero = 0;
 
     struct event_process *e = event_temp.lookup(&zero);
+    bpf_trace_printk("exit process");
 
     if (!e)
         return 0;
     e->ktime_ns = bpf_ktime_get_ns();
 
-    struct process_info proc_info = {0, 0};
+    struct process_info proc_info = {0};
     struct process_info *pproc_info;
     struct key_proc_pv key_pv;
     __u64 pid = bpf_get_current_pid_tgid();
@@ -360,15 +356,16 @@ int exit_process(struct pt_regs *ctx)
         return 0;
     }
 
-    key_pv.pid = pid;
-    key_pv.id = pproc_info->id;
+    key_pv.pid = pid >> 32;
     key_pv.count = pproc_info->count;
 
     struct dbCommon **pprecord;
     pprecord = proc_pv_hash.lookup(&key_pv);
+    bpf_trace_printk("exit process: %d %d", key_pv.pid, key_pv.count);
 
     if (!pprecord)
     {
+        bpf_trace_printk("exit error");
         return 0;
     }
 
@@ -380,7 +377,6 @@ int exit_process(struct pt_regs *ctx)
     if (pproc_info != 0)
     {
         proc_info.count = pproc_info->count;
-        proc_info.id = pproc_info->id;
         proc_info.count = proc_info.count - 1;
         if (proc_info.count == 0)
         {
@@ -479,7 +475,7 @@ int exit_process(struct pt_regs *ctx)
     bpf_get_current_comm(&(e->comm), sizeof(e->comm));
     e->state = STATE_EXIT_PROC;
     memcpy(e->pvname, pvname, sizeof(e->pvname));
-    e->id = proc_info.id;
+    e->id = bpf_get_prandom_u32();
     e->count = proc_info.count + 1;
     e->ts_sec = data->time.secPastEpoch;
     e->ts_nano = data->time.nsec;
