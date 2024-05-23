@@ -179,7 +179,7 @@ def callback_process(cpu, data, size):
     else:
         procs[event.pid] = proc
 
-    print(f"{event.pvname} {event.pid} {event.state} {event.ptid} {event.psid}")
+    # print(f"{event.pvname} {event.pid} {event.state} {event.ptid} {event.psid}")
     if event.state == STATE_ENTER_PROC:
         events = [event]
         proc.append(events)
@@ -226,9 +226,6 @@ def export_zipkin_index(events):
     # print(ptid)
     if ptid != 0:
         psid = enter.psid
-        # print(
-        #    f"ptid={enter.ptid}, psid={enter.psid}, tid={enter.tid}, sid={enter.sid}, "
-        # )
 
         span_context = SpanContext(
             trace_id=ptid,
