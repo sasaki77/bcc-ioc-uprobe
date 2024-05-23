@@ -92,6 +92,22 @@ struct put_pv
     __u32 id;
 };
 
+struct event_caput
+{
+    __u64 ktime_ns;
+    __u64 ktime_ns_end;
+    char pvname[100];
+    __u64 ptid;
+    __u64 psid;
+    __u64 tid;
+    __u64 sid;
+    __u32 val_type;
+    __s64 val_i;
+    __u64 val_u;
+    double val_d;
+    char val_s[MAX_STRING_SIZE];
+};
+
 BPF_HASH(otel_ctx, __u64, struct otel_context);
 
 BPF_PERCPU_ARRAY(db_data, dbCommon, 1);
@@ -115,6 +131,11 @@ BPF_PERCPU_ARRAY(db_data_put, dbAddr, 1);
 
 BPF_RINGBUF_OUTPUT(ring_buf_put, 1 << 4);
 BPF_HASH(put_pv_hash, __u64, struct event_put);
+
+BPF_PERCPU_ARRAY(link_data, struct link, 1);
+BPF_PERCPU_ARRAY(calink_data, struct caLink, 1);
+BPF_HASH(caput_pv_hash, __u64, struct event_caput);
+BPF_RINGBUF_OUTPUT(ring_buf_caput, 1 << 4);
 
 int enter_dbput(struct pt_regs *ctx, void *paddr, short dbrType, void *pbuffer, long nRequest)
 {
@@ -771,5 +792,186 @@ int exit_dbfirstrecord(struct pt_regs *ctx)
     }
 
     pv_entry_hash.update(&key, &ent);
+    return 0;
+};
+
+int enter_caput(struct pt_regs *ctx, struct link *plink, short dbrType,
+                const void *pbuffer, long nRequest, dbCaCallback callback, void *userPvt)
+{
+    int ret;
+    short _dbrType;
+    __u32 zero = 0;
+    struct event_caput e = {};
+
+    e.ktime_ns = bpf_ktime_get_ns();
+
+    struct link *ldata = link_data.lookup(&zero);
+
+    if (!ldata)
+        return 0;
+
+    if (!plink)
+        return 0;
+
+    ret = bpf_probe_read_user(ldata, sizeof(struct link), plink);
+
+    caLink *pca = calink_data.lookup(&zero);
+
+    if (!pca)
+        return 0;
+
+    if (!(plink->value.pv_link.pvt))
+        return 0;
+
+    ret = bpf_probe_read_user(pca, sizeof(struct caLink), plink->value.pv_link.pvt);
+
+    char pvname[100];
+
+    if (!(pca->pvname))
+        return 0;
+
+    ret = bpf_probe_read_user(e.pvname, sizeof(pvname), pca->pvname);
+
+    if (!pbuffer)
+        return 0;
+
+    _dbrType = dbrType;
+
+    char fieldname[41];
+
+    switch (_dbrType)
+    {
+    case DBF_STRING:
+    {
+        ret = bpf_probe_read_user(&(e.val_s), MAX_STRING_SIZE, (void *)((char *)pbuffer));
+        e.val_type = VAL_TYPE_STRING;
+        break;
+    }
+    case DBF_CHAR:
+    {
+        __s8 val;
+        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
+        e.val_type = VAL_TYPE_INT;
+        e.val_i = (__s64)val;
+        break;
+    }
+    case DBF_SHORT:
+    {
+        __s16 val;
+        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
+        e.val_type = VAL_TYPE_INT;
+        e.val_i = (__s64)val;
+        break;
+    }
+    case DBF_LONG:
+    {
+        __s32 val;
+        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
+        e.val_type = VAL_TYPE_INT;
+        e.val_i = (__s64)val;
+        break;
+    }
+    case DBF_INT64:
+    {
+        __s64 val;
+        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
+        e.val_type = VAL_TYPE_INT;
+        e.val_i = (__s64)val;
+        break;
+    }
+    case DBF_UCHAR:
+    {
+        __u8 val;
+        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
+        e.val_type = VAL_TYPE_UINT;
+        e.val_u = (__u64)val;
+        break;
+    }
+    case DBF_USHORT:
+    case DBF_ENUM:
+    {
+        __u16 val;
+        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
+        e.val_type = VAL_TYPE_UINT;
+        e.val_u = (__u64)val;
+        break;
+    }
+    case DBF_ULONG:
+    {
+        __u32 val;
+        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
+        e.val_type = VAL_TYPE_UINT;
+        e.val_u = (__u64)val;
+        break;
+    }
+    case DBF_UINT64:
+    {
+        __u64 val;
+        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
+        e.val_type = VAL_TYPE_UINT;
+        e.val_u = (__u64)val;
+        break;
+    }
+    case DBF_FLOAT:
+    case DBF_DOUBLE:
+    {
+        double val;
+        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
+        e.val_type = VAL_TYPE_DOUBLE;
+        e.val_d = (double)val;
+        break;
+    }
+    default:
+        e.val_type = VAL_TYPE_NULL;
+        break;
+    }
+
+    bpf_trace_printk("record=%s", pvname);
+    bpf_trace_printk("value=%d", e.val_type);
+
+    __u64 pid = bpf_get_current_pid_tgid();
+    struct otel_context *ot_ctx = otel_ctx.lookup(&pid);
+    struct otel_context new_ctx;
+
+    if (!ot_ctx)
+    {
+        ot_ctx = &new_ctx;
+        ot_ctx->tid = bpf_get_prandom_u32();
+        ot_ctx->tid = (ot_ctx->tid - 1) | (ot_ctx->tid + 1) << 32;
+        e.ptid = 0;
+        e.psid = 0;
+    }
+    else
+    {
+        e.ptid = ot_ctx->tid;
+        e.psid = ot_ctx->sid;
+    }
+
+    ot_ctx->sid = bpf_get_prandom_u32();
+    ot_ctx->sid = (ot_ctx->sid - 1) | (ot_ctx->sid + 1) << 32;
+
+    e.tid = ot_ctx->tid;
+    e.sid = ot_ctx->sid;
+
+    caput_pv_hash.update(&pid, &e);
+
+    return 0;
+};
+
+int exit_caput(struct pt_regs *ctx)
+{
+    __u64 pid = bpf_get_current_pid_tgid();
+    struct event_caput *p = caput_pv_hash.lookup(&pid);
+
+    if (!p)
+    {
+        return 0;
+    }
+
+    p->ktime_ns_end = bpf_ktime_get_ns();
+    ring_buf_caput.ringbuf_output(p, sizeof(struct event_caput), 0);
+
+    caput_pv_hash.delete(&pid);
+
     return 0;
 };

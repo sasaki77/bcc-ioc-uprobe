@@ -53,6 +53,16 @@ put_tracer_provider.add_span_processor(put_processor)
 
 put_tracer = trace.get_tracer("tracer.two", tracer_provider=put_tracer_provider)
 
+caput_resource = Resource(attributes={SERVICE_NAME: "caput-service"})
+caput_tracer_provider = TracerProvider(
+    resource=caput_resource, id_generator=custom_id_generator
+)
+# caput_processor = BatchSpanProcessor(ConsoleSpanExporter())
+caput_processor = BatchSpanProcessor(zipkin_exporter)
+caput_tracer_provider.add_span_processor(caput_processor)
+
+caput_tracer = trace.get_tracer("tracer.two", tracer_provider=caput_tracer_provider)
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument(
     "-p", "-path", dest="libpath", required=True, help="Path to libdbCore"
@@ -104,6 +114,16 @@ b.attach_uretprobe(
     sym="dbPutField",
     fn_name="exit_dbput",
 )
+b.attach_uprobe(
+    name=libpath,
+    sym="dbCaPutLinkCallback",
+    fn_name="enter_caput",
+)
+b.attach_uretprobe(
+    name=libpath,
+    sym="dbCaPutLinkCallback",
+    fn_name="exit_caput",
+)
 
 # The structure is defined manually in this program.
 # BCC can cast the automatically, but double is not supported.
@@ -142,6 +162,23 @@ class Data_put(ct.Structure):
         ("ktime_ns_end", ct.c_ulonglong),
         ("pvname", ct.c_char * 61),
         ("field_name", ct.c_char * 61),
+        ("ptid", ct.c_ulonglong),
+        ("psid", ct.c_ulonglong),
+        ("tid", ct.c_ulonglong),
+        ("sid", ct.c_ulonglong),
+        ("val_type", ct.c_uint),
+        ("val_i", ct.c_longlong),
+        ("val_u", ct.c_ulonglong),
+        ("val_d", ct.c_double),
+        ("val_s", ct.c_char * MAX_STRING_SIZE),
+    ]
+
+
+class Data_caput(ct.Structure):
+    _fields_ = [
+        ("ktime_ns", ct.c_ulonglong),
+        ("ktime_ns_end", ct.c_ulonglong),
+        ("pvname", ct.c_char * 100),
         ("ptid", ct.c_ulonglong),
         ("psid", ct.c_ulonglong),
         ("tid", ct.c_ulonglong),
@@ -285,8 +322,52 @@ def callback_put(cpu, data, size):
         span.end(event.ktime_ns_end + BOOT_TIME_NS)
 
 
+def callback_caput(cpu, data, size):
+    event = ct.cast(data, ct.POINTER(Data_caput)).contents
+
+    if event.val_type == VAL_TYPE_INT:
+        val = event.val_i
+    if event.val_type == VAL_TYPE_UINT:
+        val = event.val_u
+    if event.val_type == VAL_TYPE_DOUBLE:
+        val = event.val_d
+    if event.val_type == VAL_TYPE_STRING:
+        val = event.val_s.decode("utf-8")
+    if event.val_type == VAL_TYPE_NULL:
+        val = "NULL"
+
+    ptid = event.ptid | event.ptid << 64
+    if ptid != 0:
+        psid = event.psid
+
+        span_context = SpanContext(
+            trace_id=ptid,
+            span_id=psid,
+            is_remote=True,
+            trace_flags=TraceFlags(0x01),
+        )
+        ctx = trace.set_span_in_context(NonRecordingSpan(span_context))
+
+    sid = event.sid
+    tid = event.tid | event.tid << 64
+
+    pvname = event.pvname.decode("utf-8")
+    span_name = f"{pvname} ({val})"
+    custom_id_generator.set_generate_span_id_arguments(tid, sid)
+    with caput_tracer.start_as_current_span(
+        span_name,
+        start_time=(event.ktime_ns + BOOT_TIME_NS),
+        end_on_exit=False,
+        context=ctx,
+    ) as span:
+        span.set_attribute("pv.name", pvname)
+        span.set_attribute("pv.value", val)
+        span.end(event.ktime_ns_end + BOOT_TIME_NS)
+
+
 b["ring_buf"].open_ring_buffer(callback_process)
 b["ring_buf_put"].open_ring_buffer(callback_put)
+b["ring_buf_caput"].open_ring_buffer(callback_caput)
 
 
 print("start")
