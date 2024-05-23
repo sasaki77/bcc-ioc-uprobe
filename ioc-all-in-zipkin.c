@@ -10,6 +10,14 @@ BPF_PERCPU_ARRAY(mapdbfld, dbFldDes, 1);
 
 BPF_PERCPU_ARRAY(dbent_dbl, DBENTRY *, 1);
 
+struct otel_context
+{
+    __u64 tid;
+    __u64 sid;
+};
+
+BPF_HASH(otel_ctx, __u64, struct otel_context);
+
 struct key_t
 {
     char name[61];
@@ -52,7 +60,10 @@ struct event_process
     char comm[TASK_COMM_LEN];
     __u64 ktime_ns;
     __u32 state;
-    __u32 id;
+    __u64 ptid;
+    __u64 psid;
+    __u64 tid;
+    __u64 sid;
     __u32 count;
     __u32 ts_sec;
     __u32 ts_nano;
@@ -64,7 +75,7 @@ struct event_process
     char val_s[MAX_STRING_SIZE];
 };
 
-BPF_ARRAY(event_temp, struct event_process, 1);
+BPF_PERCPU_ARRAY(event_temp, struct event_process, 1);
 
 BPF_PERCPU_ARRAY(e, struct event_process, 1);
 
@@ -91,7 +102,10 @@ struct event_put
     __u64 ktime_ns_end;
     char pvname[61];
     char field_name[61];
-    __u32 id;
+    __u64 ptid;
+    __u64 psid;
+    __u64 tid;
+    __u64 sid;
     __u32 val_type;
     __s64 val_i;
     __u64 val_u;
@@ -229,12 +243,33 @@ int enter_dbput(struct pt_regs *ctx, void *paddr, short dbrType, void *pbuffer, 
     ret = bpf_probe_read_user(e.pvname, sizeof(e.pvname), data->precord->name);
     ret = bpf_probe_read_user(e.field_name, sizeof(e.field_name), n->pfldDes->name);
 
-    __u32 random_id = bpf_get_prandom_u32();
-    e.id = random_id;
+    __u64 pid = bpf_get_current_pid_tgid();
+    struct otel_context *ot_ctx = otel_ctx.lookup(&pid);
+    struct otel_context new_ctx;
+
+    if (!ot_ctx)
+    {
+        // new_ctx.tid = bpf_get_prandom_u32() | bpf_get_prandom_u32() << 32;
+        ot_ctx = &new_ctx;
+        ot_ctx->tid = bpf_get_prandom_u32();
+        ot_ctx->tid = (ot_ctx->tid - 1) | (ot_ctx->tid + 1) << 32;
+    }
+    else
+    {
+        e.ptid = ot_ctx->tid;
+        e.psid = ot_ctx->sid;
+    }
+
+    ot_ctx->sid = bpf_get_prandom_u32();
+    ot_ctx->sid = (ot_ctx->sid - 1) | (ot_ctx->sid + 1) << 32;
+
+    e.tid = ot_ctx->tid;
+    e.sid = ot_ctx->sid;
+
+    otel_ctx.update(&pid, ot_ctx);
 
     // ring_buf_put.ringbuf_output(&e, sizeof(struct event_put), 0);
 
-    __u64 pid = bpf_get_current_pid_tgid();
     put_pv_hash.update(&pid, &e);
 
     return 0;
@@ -253,6 +288,7 @@ int exit_dbput(struct pt_regs *ctx)
     ring_buf_put.ringbuf_output(p, sizeof(struct event_put), 0);
 
     put_pv_hash.delete(&pid);
+    otel_ctx.delete(&pid);
 
     return 0;
 };
@@ -291,23 +327,14 @@ int enter_process(struct pt_regs *ctx)
     pproc_info = process_hash.lookup(&pid);
 
     __u32 random_id = bpf_get_prandom_u32();
-    ;
-    if (!pproc_info)
-    {
-        struct event_put *p = put_pv_hash.lookup(&pid);
-        if (p)
-        {
-            random_id = p->id;
-        }
-        bpf_trace_printk("hello %d", random_id);
-    }
-    else
+
+    if (pproc_info)
     {
         proc_info.count = pproc_info->count;
     }
     proc_info.count = proc_info.count + 1;
 
-    key.pid = pid >> 32;
+    key.pid = pid & 0xffffffff;
     key.count = proc_info.count;
 
     process_hash.update(&pid, &proc_info);
@@ -319,13 +346,37 @@ int enter_process(struct pt_regs *ctx)
     bpf_get_current_comm(&(e->comm), sizeof(e->comm));
     e->state = STATE_ENTER_PROC;
     memcpy((e->pvname), data->name, sizeof(e->pvname));
-    e->id = random_id;
     e->count = proc_info.count;
     e->ts_sec = data->time.secPastEpoch;
     e->ts_nano = data->time.nsec;
     e->val_i = 0;
     e->val_u = 0;
     e->val_d = 0;
+
+    struct otel_context *ot_ctx = otel_ctx.lookup(&pid);
+    struct otel_context new_ctx;
+
+    if (!ot_ctx)
+    {
+        ot_ctx = &new_ctx;
+        ot_ctx->tid = bpf_get_prandom_u32();
+        ot_ctx->tid = (ot_ctx->tid - 1) | (ot_ctx->tid + 1) << 32;
+        e->ptid = 0;
+        e->psid = 0;
+    }
+    else
+    {
+        e->ptid = ot_ctx->tid;
+        e->psid = ot_ctx->sid;
+    }
+
+    ot_ctx->sid = bpf_get_prandom_u32();
+    ot_ctx->sid = (ot_ctx->sid - 1) | (ot_ctx->sid + 1) << 32;
+
+    e->tid = ot_ctx->tid;
+    e->sid = ot_ctx->sid;
+
+    otel_ctx.update(&pid, ot_ctx);
 
     ring_buf.ringbuf_output(e, sizeof(struct event_process), 0);
 
@@ -356,7 +407,7 @@ int exit_process(struct pt_regs *ctx)
         return 0;
     }
 
-    key_pv.pid = pid >> 32;
+    key_pv.pid = pid;
     key_pv.count = pproc_info->count;
 
     struct dbCommon **pprecord;
@@ -382,6 +433,7 @@ int exit_process(struct pt_regs *ctx)
         {
             bpf_trace_printk("trace: %d", proc_info.count);
             process_hash.delete(&pid);
+            otel_ctx.delete(&pid);
         }
         else
         {
@@ -475,7 +527,6 @@ int exit_process(struct pt_regs *ctx)
     bpf_get_current_comm(&(e->comm), sizeof(e->comm));
     e->state = STATE_EXIT_PROC;
     memcpy(e->pvname, pvname, sizeof(e->pvname));
-    e->id = bpf_get_prandom_u32();
     e->count = proc_info.count + 1;
     e->ts_sec = data->time.secPastEpoch;
     e->ts_nano = data->time.nsec;
