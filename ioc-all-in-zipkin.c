@@ -2,21 +2,13 @@
 #include <linux/sched.h>
 #include "epicsStructure.h"
 
-BPF_PERCPU_ARRAY(db_data, dbCommon, 1);
-BPF_PERCPU_ARRAY(retdb_data, dbCommon, 1);
-BPF_PERCPU_ARRAY(recn, dbRecordNode, 1);
-BPF_PERCPU_ARRAY(rectype, dbRecordType, 1);
-BPF_PERCPU_ARRAY(mapdbfld, dbFldDes, 1);
-
-BPF_PERCPU_ARRAY(dbent_dbl, DBENTRY *, 1);
+#define TASK_COMM_LEN 16
 
 struct otel_context
 {
     __u64 tid;
     __u64 sid;
 };
-
-BPF_HASH(otel_ctx, __u64, struct otel_context);
 
 struct key_t
 {
@@ -29,10 +21,6 @@ struct create_rec_args
     DBENTRY *pentry;
 };
 
-BPF_PERCPU_ARRAY(dbent, struct create_rec_args, 1);
-
-BPF_HASH(pv_entry_hash, struct key_t, DBENTRY);
-
 struct process_info
 {
     __u32 count;
@@ -43,15 +31,6 @@ struct key_proc_pv
     __u32 pid;
     __u32 count;
 };
-
-BPF_HASH(process_hash, __u64, struct process_info);
-BPF_HASH(proc_pv_hash, struct key_proc_pv, dbCommon *);
-
-BPF_ARRAY(temp, double, 1);
-
-BPF_RINGBUF_OUTPUT(ring_buf, 1 << 4);
-
-#define TASK_COMM_LEN 16
 
 struct event_process
 {
@@ -75,10 +54,6 @@ struct event_process
     char val_s[MAX_STRING_SIZE];
 };
 
-BPF_PERCPU_ARRAY(event_temp, struct event_process, 1);
-
-BPF_PERCPU_ARRAY(e, struct event_process, 1);
-
 enum state_type
 {
     STATE_ENTER_PROC = 1,
@@ -93,8 +68,6 @@ enum val_type
     VAL_TYPE_STRING = 4,
     VAL_TYPE_NULL = 5,
 };
-
-BPF_PERCPU_ARRAY(db_data_put, dbAddr, 1);
 
 struct event_put
 {
@@ -113,13 +86,34 @@ struct event_put
     char val_s[MAX_STRING_SIZE];
 };
 
-BPF_RINGBUF_OUTPUT(ring_buf_put, 1 << 4);
-
 struct put_pv
 {
     char name[61];
     __u32 id;
 };
+
+BPF_HASH(otel_ctx, __u64, struct otel_context);
+
+BPF_PERCPU_ARRAY(db_data, dbCommon, 1);
+BPF_PERCPU_ARRAY(retdb_data, dbCommon, 1);
+BPF_PERCPU_ARRAY(recn, dbRecordNode, 1);
+BPF_PERCPU_ARRAY(rectype, dbRecordType, 1);
+BPF_PERCPU_ARRAY(mapdbfld, dbFldDes, 1);
+BPF_PERCPU_ARRAY(dbent_dbl, DBENTRY *, 1);
+BPF_PERCPU_ARRAY(dbent, struct create_rec_args, 1);
+
+BPF_HASH(pv_entry_hash, struct key_t, DBENTRY);
+
+BPF_HASH(process_hash, __u64, struct process_info);
+BPF_HASH(proc_pv_hash, struct key_proc_pv, dbCommon *);
+
+BPF_RINGBUF_OUTPUT(ring_buf, 1 << 4);
+
+BPF_PERCPU_ARRAY(event_temp, struct event_process, 1);
+BPF_PERCPU_ARRAY(e, struct event_process, 1);
+BPF_PERCPU_ARRAY(db_data_put, dbAddr, 1);
+
+BPF_RINGBUF_OUTPUT(ring_buf_put, 1 << 4);
 BPF_HASH(put_pv_hash, __u64, struct event_put);
 
 int enter_dbput(struct pt_regs *ctx, void *paddr, short dbrType, void *pbuffer, long nRequest)
@@ -506,10 +500,6 @@ int exit_process(struct pt_regs *ctx)
     {
         ret = bpf_probe_read_user(dbfld, size, type->pvalFldDes);
     }
-
-    double *t = temp.lookup(&zero);
-    if (!t)
-        return 0;
 
     char fname[10];
     size = sizeof(fname);
