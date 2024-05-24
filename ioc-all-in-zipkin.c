@@ -262,8 +262,6 @@ static __always_inline void updateOtelContext(__u64 pid, __u64 *ptid, __u64 *psi
 int enter_dbput(struct pt_regs *ctx, void *paddr, short dbrType, void *pbuffer, long nRequest)
 {
     int ret;
-    short _dbrType;
-    long _nRequest;
     __u32 zero = 0;
     struct event_put e = {};
 
@@ -280,9 +278,6 @@ int enter_dbput(struct pt_regs *ctx, void *paddr, short dbrType, void *pbuffer, 
 
     if (!pbuffer)
         return 0;
-
-    _dbrType = dbrType;
-    _nRequest = nRequest;
 
     char fieldname[41];
     dbAddr *n = (dbAddr *)paddr;
@@ -306,6 +301,7 @@ int exit_dbput(struct pt_regs *ctx)
 {
     __u64 pid = bpf_get_current_pid_tgid();
     struct event_put *p = put_pv_hash.lookup(&pid);
+
     if (!p)
     {
         return 0;
@@ -352,8 +348,6 @@ int enter_process(struct pt_regs *ctx)
     __u64 pid = bpf_get_current_pid_tgid();
 
     pproc_info = process_hash.lookup(&pid);
-
-    __u32 random_id = bpf_get_prandom_u32();
 
     if (pproc_info)
     {
