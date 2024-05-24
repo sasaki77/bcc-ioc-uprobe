@@ -3,65 +3,25 @@
 from __future__ import print_function
 from os import getpid
 import argparse
-import ctypes as ct
 import time
 import sys
 
 from bcc import BPF
 
 
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
     ConsoleSpanExporter,
 )
-from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
 
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 
 from opentelemetry.exporter.zipkin.proto.http import ZipkinExporter
 
-from psutil import boot_time
-from customidgen import CustomIdGen
+from ptracezipkin import ProcessTracer
+from putzipkin import PutTracer
+from caputzipkin import CaputTracer
 
-
-custom_id_generator = CustomIdGen()
-
-resource = Resource(attributes={SERVICE_NAME: "process-service"})
-zipkin_exporter = ZipkinExporter(endpoint="http://localhost:9411/api/v2/spans")
-
-# provider = TracerProvider()
-provider = TracerProvider(resource=resource, id_generator=custom_id_generator)
-# processor = BatchSpanProcessor(ConsoleSpanExporter())
-processor = BatchSpanProcessor(zipkin_exporter)
-provider.add_span_processor(processor)
-
-# Sets the global default tracer provider
-trace.set_tracer_provider(provider)
-
-# Creates a tracer from the global tracer provider
-tracer = trace.get_tracer("my.tracer.name")
-
-put_resource = Resource(attributes={SERVICE_NAME: "put-service"})
-put_tracer_provider = TracerProvider(
-    resource=put_resource, id_generator=custom_id_generator
-)
-# put_processor = BatchSpanProcessor(ConsoleSpanExporter())
-put_processor = BatchSpanProcessor(zipkin_exporter)
-put_tracer_provider.add_span_processor(put_processor)
-
-put_tracer = trace.get_tracer("tracer.two", tracer_provider=put_tracer_provider)
-
-caput_resource = Resource(attributes={SERVICE_NAME: "caput-service"})
-caput_tracer_provider = TracerProvider(
-    resource=caput_resource, id_generator=custom_id_generator
-)
-# caput_processor = BatchSpanProcessor(ConsoleSpanExporter())
-caput_processor = BatchSpanProcessor(zipkin_exporter)
-caput_tracer_provider.add_span_processor(caput_processor)
-
-caput_tracer = trace.get_tracer("tracer.two", tracer_provider=caput_tracer_provider)
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument(
@@ -125,249 +85,18 @@ b.attach_uretprobe(
     fn_name="exit_caput",
 )
 
-# The structure is defined manually in this program.
-# BCC can cast the automatically, but double is not supported.
-# https://github.com/iovisor/bcc/pull/2198
 
-TASK_COMM_LEN = 16  # linux/sched.h
-MAX_STRING_SIZE = 60
+resource = Resource(attributes={SERVICE_NAME: "process-service"})
+zipkin_exporter = ZipkinExporter(endpoint="http://localhost:9411/api/v2/spans")
 
+# processor = BatchSpanProcessor(ConsoleSpanExporter())
+prt = ProcessTracer("process-service", BatchSpanProcessor(zipkin_exporter))
+ptt = PutTracer("put-service", BatchSpanProcessor(zipkin_exporter))
+cpt = CaputTracer("caput-service", BatchSpanProcessor(zipkin_exporter))
 
-class Data_process(ct.Structure):
-    _fields_ = [
-        ("type", ct.c_int),
-        ("pid", ct.c_uint),
-        ("comm", ct.c_char * TASK_COMM_LEN),
-        ("ktime_ns", ct.c_ulonglong),
-        ("state", ct.c_uint),
-        ("ptid", ct.c_ulonglong),
-        ("psid", ct.c_ulonglong),
-        ("tid", ct.c_ulonglong),
-        ("sid", ct.c_ulonglong),
-        ("count", ct.c_uint),
-        ("ts_sec", ct.c_uint),
-        ("ts_nano", ct.c_uint),
-        ("pvname", ct.c_char * 61),
-        ("val_type", ct.c_uint),
-        ("val_i", ct.c_longlong),
-        ("val_u", ct.c_ulonglong),
-        ("val_d", ct.c_double),
-        ("val_s", ct.c_char * MAX_STRING_SIZE),
-    ]
-
-
-class Data_put(ct.Structure):
-    _fields_ = [
-        ("ktime_ns", ct.c_ulonglong),
-        ("ktime_ns_end", ct.c_ulonglong),
-        ("pvname", ct.c_char * 61),
-        ("field_name", ct.c_char * 61),
-        ("ptid", ct.c_ulonglong),
-        ("psid", ct.c_ulonglong),
-        ("tid", ct.c_ulonglong),
-        ("sid", ct.c_ulonglong),
-        ("val_type", ct.c_uint),
-        ("val_i", ct.c_longlong),
-        ("val_u", ct.c_ulonglong),
-        ("val_d", ct.c_double),
-        ("val_s", ct.c_char * MAX_STRING_SIZE),
-    ]
-
-
-class Data_caput(ct.Structure):
-    _fields_ = [
-        ("ktime_ns", ct.c_ulonglong),
-        ("ktime_ns_end", ct.c_ulonglong),
-        ("pvname", ct.c_char * 100),
-        ("ptid", ct.c_ulonglong),
-        ("psid", ct.c_ulonglong),
-        ("tid", ct.c_ulonglong),
-        ("sid", ct.c_ulonglong),
-        ("val_type", ct.c_uint),
-        ("val_i", ct.c_longlong),
-        ("val_u", ct.c_ulonglong),
-        ("val_d", ct.c_double),
-        ("val_s", ct.c_char * MAX_STRING_SIZE),
-    ]
-
-
-STATE_ENTER_PROC = 1
-STATE_EXIT_PROC = 2
-
-STATE_DICT = {STATE_ENTER_PROC: '"Enter Process"', STATE_EXIT_PROC: '"Exit Process"'}
-
-VAL_TYPE_INT = 1
-VAL_TYPE_UINT = 2
-VAL_TYPE_DOUBLE = 3
-VAL_TYPE_STRING = 4
-VAL_TYPE_NULL = 5
-
-procs = {}
-BOOT_TIME_NS = int((time.time() - time.monotonic()) * 1e9)
-EPICS_TIME_OFFSET = 631152000
-
-
-def callback_process(cpu, data, size):
-    event = ct.cast(data, ct.POINTER(Data_process)).contents
-
-    proc = []
-    if event.pid in procs:
-        proc = procs[event.pid]
-    else:
-        procs[event.pid] = proc
-
-    # print(f"{event.pvname} {event.pid} {event.state} {event.ptid} {event.psid}")
-    if event.state == STATE_ENTER_PROC:
-        events = [event]
-        proc.append(events)
-        return
-
-    if event.state == STATE_EXIT_PROC:
-        events = proc[event.count - 1]
-        events.append(event)
-        if event.count == 1:
-            for p in proc:
-                export_zipkin_index(p)
-
-            del procs[event.pid]
-
-
-def export_zipkin_index(events):
-    if len(events) < 2:
-        return
-
-    enter = events[0]
-    exit = events[1]
-
-    if enter.state == STATE_EXIT_PROC:
-        return
-
-    val = 0
-    if exit.val_type == VAL_TYPE_INT:
-        val = exit.val_i
-    if exit.val_type == VAL_TYPE_UINT:
-        val = exit.val_u
-    if exit.val_type == VAL_TYPE_DOUBLE:
-        val = exit.val_d
-    if exit.val_type == VAL_TYPE_STRING:
-        val = exit.val_s.decode("utf-8")
-    if exit.val_type == VAL_TYPE_NULL:
-        val = "NULL"
-
-    pvname = enter.pvname.decode("utf-8")
-    span_name = f"{pvname} ({val})"
-    ctx = None
-
-    # print(pvname)
-    ptid = enter.ptid | enter.ptid << 64
-    # print(ptid)
-    if ptid != 0:
-        psid = enter.psid
-
-        span_context = SpanContext(
-            trace_id=ptid,
-            span_id=psid,
-            is_remote=True,
-            trace_flags=TraceFlags(0x01),
-        )
-        ctx = trace.set_span_in_context(NonRecordingSpan(span_context))
-
-    sid = enter.sid
-    tid = enter.tid | enter.tid << 64
-    custom_id_generator.set_generate_span_id_arguments(tid, sid)
-    with tracer.start_as_current_span(
-        span_name,
-        start_time=(enter.ktime_ns + BOOT_TIME_NS),
-        end_on_exit=False,
-        context=ctx,
-    ) as span:
-        # export_zipkin_index(proc, index + 1)
-        ts = int((exit.ts_sec + EPICS_TIME_OFFSET) * 1e9 + exit.ts_nano)
-        span.add_event("Process", timestamp=ts)
-        span.set_attribute("pv.name", pvname)
-        span.set_attribute("pv.value", val)
-        span.set_attribute("os.pid", enter.pid)
-        span.end(exit.ktime_ns + BOOT_TIME_NS)
-
-
-def callback_put(cpu, data, size):
-    event = ct.cast(data, ct.POINTER(Data_put)).contents
-
-    if event.val_type == VAL_TYPE_INT:
-        val = event.val_i
-    if event.val_type == VAL_TYPE_UINT:
-        val = event.val_u
-    if event.val_type == VAL_TYPE_DOUBLE:
-        val = event.val_d
-    if event.val_type == VAL_TYPE_STRING:
-        val = event.val_s.decode("utf-8")
-    if event.val_type == VAL_TYPE_NULL:
-        val = "NULL"
-
-    sid = event.sid
-    tid = event.tid | event.tid << 64
-
-    pvname = event.pvname.decode("utf-8")
-    field_name = event.field_name.decode("utf-8")
-    span_name = f"{pvname} ({val})"
-    custom_id_generator.set_generate_span_id_arguments(tid, sid)
-    with put_tracer.start_as_current_span(
-        span_name,
-        start_time=(event.ktime_ns + BOOT_TIME_NS),
-        end_on_exit=False,
-    ) as span:
-        span.set_attribute("pv.name", pvname)
-        span.set_attribute("pv.field", field_name)
-        span.set_attribute("pv.value", val)
-        span.end(event.ktime_ns_end + BOOT_TIME_NS)
-
-
-def callback_caput(cpu, data, size):
-    event = ct.cast(data, ct.POINTER(Data_caput)).contents
-
-    if event.val_type == VAL_TYPE_INT:
-        val = event.val_i
-    if event.val_type == VAL_TYPE_UINT:
-        val = event.val_u
-    if event.val_type == VAL_TYPE_DOUBLE:
-        val = event.val_d
-    if event.val_type == VAL_TYPE_STRING:
-        val = event.val_s.decode("utf-8")
-    if event.val_type == VAL_TYPE_NULL:
-        val = "NULL"
-
-    ptid = event.ptid | event.ptid << 64
-    if ptid != 0:
-        psid = event.psid
-
-        span_context = SpanContext(
-            trace_id=ptid,
-            span_id=psid,
-            is_remote=True,
-            trace_flags=TraceFlags(0x01),
-        )
-        ctx = trace.set_span_in_context(NonRecordingSpan(span_context))
-
-    sid = event.sid
-    tid = event.tid | event.tid << 64
-
-    pvname = event.pvname.decode("utf-8")
-    span_name = f"{pvname} ({val})"
-    custom_id_generator.set_generate_span_id_arguments(tid, sid)
-    with caput_tracer.start_as_current_span(
-        span_name,
-        start_time=(event.ktime_ns + BOOT_TIME_NS),
-        end_on_exit=False,
-        context=ctx,
-    ) as span:
-        span.set_attribute("pv.name", pvname)
-        span.set_attribute("pv.value", val)
-        span.end(event.ktime_ns_end + BOOT_TIME_NS)
-
-
-b["ring_buf"].open_ring_buffer(callback_process)
-b["ring_buf_put"].open_ring_buffer(callback_put)
-b["ring_buf_caput"].open_ring_buffer(callback_caput)
+b["ring_buf"].open_ring_buffer(prt.callback)
+b["ring_buf_put"].open_ring_buffer(ptt.callback)
+b["ring_buf_caput"].open_ring_buffer(cpt.callback)
 
 
 print("start")
