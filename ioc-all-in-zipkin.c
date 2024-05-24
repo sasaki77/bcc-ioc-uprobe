@@ -137,6 +137,100 @@ BPF_PERCPU_ARRAY(calink_data, struct caLink, 1);
 BPF_HASH(caput_pv_hash, __u64, struct event_caput);
 BPF_RINGBUF_OUTPUT(ring_buf_caput, 1 << 4);
 
+static __always_inline short pickPvValue(short dbr_type, void *pbuffer, __s64 *val_i, __u64 *val_u, double *val_d, char *val_s)
+{
+    int ret;
+    short val_type;
+
+    switch (dbr_type)
+    {
+    case DBF_STRING:
+    {
+        ret = bpf_probe_read_user(val_s, MAX_STRING_SIZE, pbuffer);
+        val_type = VAL_TYPE_STRING;
+        break;
+    }
+    case DBF_CHAR:
+    {
+        __s8 val;
+        ret = bpf_probe_read_user(&val, sizeof(val), pbuffer);
+        val_type = VAL_TYPE_INT;
+        *val_i = (__s64)val;
+        break;
+    }
+    case DBF_SHORT:
+    {
+        __s16 val;
+        ret = bpf_probe_read_user(&val, sizeof(val), pbuffer);
+        val_type = VAL_TYPE_INT;
+        *val_i = (__s64)val;
+        break;
+    }
+    case DBF_LONG:
+    {
+        __s32 val;
+        ret = bpf_probe_read_user(&val, sizeof(val), pbuffer);
+        val_type = VAL_TYPE_INT;
+        *val_i = (__s64)val;
+        break;
+    }
+    case DBF_INT64:
+    {
+        __s64 val;
+        ret = bpf_probe_read_user(&val, sizeof(val), pbuffer);
+        val_type = VAL_TYPE_INT;
+        *val_i = (__s64)val;
+        break;
+    }
+    case DBF_UCHAR:
+    {
+        __u8 val;
+        ret = bpf_probe_read_user(&val, sizeof(val), pbuffer);
+        val_type = VAL_TYPE_UINT;
+        *val_u = (__u64)val;
+        break;
+    }
+    case DBF_USHORT:
+    case DBF_ENUM:
+    {
+        __u16 val;
+        ret = bpf_probe_read_user(&val, sizeof(val), pbuffer);
+        val_type = VAL_TYPE_UINT;
+        *val_u = (__u64)val;
+        break;
+    }
+    case DBF_ULONG:
+    {
+        __u32 val;
+        ret = bpf_probe_read_user(&val, sizeof(val), pbuffer);
+        val_type = VAL_TYPE_UINT;
+        *val_u = (__u64)val;
+        break;
+    }
+    case DBF_UINT64:
+    {
+        __u64 val;
+        ret = bpf_probe_read_user(&val, sizeof(val), pbuffer);
+        val_type = VAL_TYPE_UINT;
+        *val_u = (__u64)val;
+        break;
+    }
+    case DBF_FLOAT:
+    case DBF_DOUBLE:
+    {
+        double val;
+        ret = bpf_probe_read_user(&val, sizeof(val), pbuffer);
+        val_type = VAL_TYPE_DOUBLE;
+        *val_d = (double)val;
+        break;
+    }
+    default:
+        val_type = VAL_TYPE_NULL;
+        break;
+    }
+    return val_type;
+}
+
 int enter_dbput(struct pt_regs *ctx, void *paddr, short dbrType, void *pbuffer, long nRequest)
 {
     int ret;
@@ -168,93 +262,7 @@ int enter_dbput(struct pt_regs *ctx, void *paddr, short dbrType, void *pbuffer, 
     if (n != 0)
         ret = bpf_probe_read_user(fieldname, sizeof(fieldname), n->pfldDes->name);
 
-    switch (_dbrType)
-    {
-    case DBF_STRING:
-    {
-        ret = bpf_probe_read_user(&(e.val_s), MAX_STRING_SIZE, (void *)((char *)pbuffer));
-        e.val_type = VAL_TYPE_STRING;
-        break;
-    }
-    case DBF_CHAR:
-    {
-        __s8 val;
-        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
-        e.val_type = VAL_TYPE_INT;
-        e.val_i = (__s64)val;
-        break;
-    }
-    case DBF_SHORT:
-    {
-        __s16 val;
-        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
-        e.val_type = VAL_TYPE_INT;
-        e.val_i = (__s64)val;
-        break;
-    }
-    case DBF_LONG:
-    {
-        __s32 val;
-        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
-        e.val_type = VAL_TYPE_INT;
-        e.val_i = (__s64)val;
-        break;
-    }
-    case DBF_INT64:
-    {
-        __s64 val;
-        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
-        e.val_type = VAL_TYPE_INT;
-        e.val_i = (__s64)val;
-        break;
-    }
-    case DBF_UCHAR:
-    {
-        __u8 val;
-        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
-        e.val_type = VAL_TYPE_UINT;
-        e.val_u = (__u64)val;
-        break;
-    }
-    case DBF_USHORT:
-    case DBF_ENUM:
-    {
-        __u16 val;
-        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
-        e.val_type = VAL_TYPE_UINT;
-        e.val_u = (__u64)val;
-        break;
-    }
-    case DBF_ULONG:
-    {
-        __u32 val;
-        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
-        e.val_type = VAL_TYPE_UINT;
-        e.val_u = (__u64)val;
-        break;
-    }
-    case DBF_UINT64:
-    {
-        __u64 val;
-        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
-        e.val_type = VAL_TYPE_UINT;
-        e.val_u = (__u64)val;
-        break;
-    }
-    case DBF_FLOAT:
-    case DBF_DOUBLE:
-    {
-        double val;
-        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
-        e.val_type = VAL_TYPE_DOUBLE;
-        e.val_d = (double)val;
-        break;
-    }
-    default:
-        e.val_type = VAL_TYPE_NULL;
-        break;
-    }
-
+    e.val_type = pickPvValue(dbrType, pbuffer, &(e.val_i), &(e.val_u), &(e.val_d), e.val_s);
     ret = bpf_probe_read_user(e.pvname, sizeof(e.pvname), data->precord->name);
     ret = bpf_probe_read_user(e.field_name, sizeof(e.field_name), n->pfldDes->name);
 
@@ -548,102 +556,7 @@ int exit_process(struct pt_regs *ctx)
 
     if (precord != 0)
     {
-        switch (field_type)
-        {
-        case DBF_STRING:
-        {
-            ret = bpf_probe_read_user(&(e->val_s), MAX_STRING_SIZE, (void *)((char *)recnode->precord + dbfld->offset));
-            bpf_trace_printk("exit val: %s", e->val_s);
-            e->val_type = VAL_TYPE_STRING;
-            break;
-        }
-        case DBF_CHAR:
-        {
-            __s8 val;
-            ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
-            bpf_trace_printk("exit val: %d", val);
-            e->val_type = VAL_TYPE_INT;
-            e->val_i = (__s64)val;
-            break;
-        }
-        case DBF_SHORT:
-        {
-            __s16 val;
-            ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
-            bpf_trace_printk("exit val: %d", val);
-            e->val_type = VAL_TYPE_INT;
-            e->val_i = (__s64)val;
-            break;
-        }
-        case DBF_LONG:
-        {
-            __s32 val;
-            ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
-            bpf_trace_printk("exit val: %d", val);
-            e->val_type = VAL_TYPE_INT;
-            e->val_i = (__s64)val;
-            break;
-        }
-        case DBF_INT64:
-        {
-            __s64 val;
-            ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
-            bpf_trace_printk("exit val: %d", val);
-            e->val_type = VAL_TYPE_INT;
-            e->val_i = (__s64)val;
-            break;
-        }
-        case DBF_UCHAR:
-        {
-            __u8 val;
-            ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
-            bpf_trace_printk("exit val: %d", val);
-            e->val_type = VAL_TYPE_UINT;
-            e->val_u = (__u64)val;
-            break;
-        }
-        case DBF_USHORT:
-        case DBF_ENUM:
-        {
-            __u16 val;
-            ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
-            bpf_trace_printk("exit val: %d", val);
-            e->val_type = VAL_TYPE_UINT;
-            e->val_u = (__u64)val;
-            break;
-        }
-        case DBF_ULONG:
-        {
-            __u32 val;
-            ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
-            bpf_trace_printk("exit val: %d", val);
-            e->val_type = VAL_TYPE_UINT;
-            e->val_u = (__u64)val;
-            break;
-        }
-        case DBF_UINT64:
-        {
-            __u64 val;
-            ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
-            bpf_trace_printk("exit val: %d", val);
-            e->val_type = VAL_TYPE_UINT;
-            e->val_u = (__u64)val;
-            break;
-        }
-        case DBF_FLOAT:
-        case DBF_DOUBLE:
-        {
-            double val;
-            ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)recnode->precord + dbfld->offset));
-            bpf_trace_printk("exit val: %d", val);
-            e->val_type = VAL_TYPE_DOUBLE;
-            e->val_d = (double)val;
-            break;
-        }
-        default:
-            e->val_type = VAL_TYPE_NULL;
-            break;
-        }
+        e->val_type = pickPvValue(field_type, (void *)((char *)recnode->precord + dbfld->offset), &(e->val_i), &(e->val_u), &(e->val_d), e->val_s);
     }
 
     ring_buf.ringbuf_output(e, sizeof(struct event_process), 0);
@@ -796,7 +709,7 @@ int exit_dbfirstrecord(struct pt_regs *ctx)
 };
 
 int enter_caput(struct pt_regs *ctx, struct link *plink, short dbrType,
-                const void *pbuffer, long nRequest, dbCaCallback callback, void *userPvt)
+                void *pbuffer, long nRequest, dbCaCallback callback, void *userPvt)
 {
     int ret;
     short _dbrType;
@@ -838,93 +751,7 @@ int enter_caput(struct pt_regs *ctx, struct link *plink, short dbrType,
     _dbrType = dbrType;
 
     char fieldname[41];
-
-    switch (_dbrType)
-    {
-    case DBF_STRING:
-    {
-        ret = bpf_probe_read_user(&(e.val_s), MAX_STRING_SIZE, (void *)((char *)pbuffer));
-        e.val_type = VAL_TYPE_STRING;
-        break;
-    }
-    case DBF_CHAR:
-    {
-        __s8 val;
-        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
-        e.val_type = VAL_TYPE_INT;
-        e.val_i = (__s64)val;
-        break;
-    }
-    case DBF_SHORT:
-    {
-        __s16 val;
-        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
-        e.val_type = VAL_TYPE_INT;
-        e.val_i = (__s64)val;
-        break;
-    }
-    case DBF_LONG:
-    {
-        __s32 val;
-        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
-        e.val_type = VAL_TYPE_INT;
-        e.val_i = (__s64)val;
-        break;
-    }
-    case DBF_INT64:
-    {
-        __s64 val;
-        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
-        e.val_type = VAL_TYPE_INT;
-        e.val_i = (__s64)val;
-        break;
-    }
-    case DBF_UCHAR:
-    {
-        __u8 val;
-        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
-        e.val_type = VAL_TYPE_UINT;
-        e.val_u = (__u64)val;
-        break;
-    }
-    case DBF_USHORT:
-    case DBF_ENUM:
-    {
-        __u16 val;
-        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
-        e.val_type = VAL_TYPE_UINT;
-        e.val_u = (__u64)val;
-        break;
-    }
-    case DBF_ULONG:
-    {
-        __u32 val;
-        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
-        e.val_type = VAL_TYPE_UINT;
-        e.val_u = (__u64)val;
-        break;
-    }
-    case DBF_UINT64:
-    {
-        __u64 val;
-        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
-        e.val_type = VAL_TYPE_UINT;
-        e.val_u = (__u64)val;
-        break;
-    }
-    case DBF_FLOAT:
-    case DBF_DOUBLE:
-    {
-        double val;
-        ret = bpf_probe_read_user(&val, sizeof(val), (void *)((char *)pbuffer));
-        e.val_type = VAL_TYPE_DOUBLE;
-        e.val_d = (double)val;
-        break;
-    }
-    default:
-        e.val_type = VAL_TYPE_NULL;
-        break;
-    }
+    e.val_type = pickPvValue(dbrType, pbuffer, &(e.val_i), &(e.val_u), &(e.val_d), e.val_s);
 
     bpf_trace_printk("record=%s", pvname);
     bpf_trace_printk("value=%d", e.val_type);
