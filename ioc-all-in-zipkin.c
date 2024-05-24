@@ -231,6 +231,34 @@ static __always_inline short pickPvValue(short dbr_type, void *pbuffer, __s64 *v
     return val_type;
 }
 
+static __always_inline void updateOtelContext(__u64 pid, __u64 *ptid, __u64 *psid, __u64 *tid, __u64 *sid)
+{
+    struct otel_context *ot_ctx = otel_ctx.lookup(&pid);
+    struct otel_context new_ctx;
+
+    if (!ot_ctx)
+    {
+        ot_ctx = &new_ctx;
+        ot_ctx->tid = bpf_get_prandom_u32();
+        ot_ctx->tid = (ot_ctx->tid - 1) | (ot_ctx->tid + 1) << 32;
+        *ptid = 0;
+        *psid = 0;
+    }
+    else
+    {
+        *ptid = ot_ctx->tid;
+        *psid = ot_ctx->sid;
+    }
+
+    ot_ctx->sid = bpf_get_prandom_u32();
+    ot_ctx->sid = (ot_ctx->sid - 1) | (ot_ctx->sid + 1) << 32;
+
+    *tid = ot_ctx->tid;
+    *sid = ot_ctx->sid;
+
+    otel_ctx.update(&pid, ot_ctx);
+}
+
 int enter_dbput(struct pt_regs *ctx, void *paddr, short dbrType, void *pbuffer, long nRequest)
 {
     int ret;
@@ -267,31 +295,7 @@ int enter_dbput(struct pt_regs *ctx, void *paddr, short dbrType, void *pbuffer, 
     ret = bpf_probe_read_user(e.field_name, sizeof(e.field_name), n->pfldDes->name);
 
     __u64 pid = bpf_get_current_pid_tgid();
-    struct otel_context *ot_ctx = otel_ctx.lookup(&pid);
-    struct otel_context new_ctx;
-
-    if (!ot_ctx)
-    {
-        // new_ctx.tid = bpf_get_prandom_u32() | bpf_get_prandom_u32() << 32;
-        ot_ctx = &new_ctx;
-        ot_ctx->tid = bpf_get_prandom_u32();
-        ot_ctx->tid = (ot_ctx->tid - 1) | (ot_ctx->tid + 1) << 32;
-    }
-    else
-    {
-        e.ptid = ot_ctx->tid;
-        e.psid = ot_ctx->sid;
-    }
-
-    ot_ctx->sid = bpf_get_prandom_u32();
-    ot_ctx->sid = (ot_ctx->sid - 1) | (ot_ctx->sid + 1) << 32;
-
-    e.tid = ot_ctx->tid;
-    e.sid = ot_ctx->sid;
-
-    otel_ctx.update(&pid, ot_ctx);
-
-    // ring_buf_put.ringbuf_output(&e, sizeof(struct event_put), 0);
+    updateOtelContext(pid, &(e.ptid), &(e.psid), &(e.tid), &(e.sid));
 
     put_pv_hash.update(&pid, &e);
 
@@ -376,30 +380,7 @@ int enter_process(struct pt_regs *ctx)
     e->val_u = 0;
     e->val_d = 0;
 
-    struct otel_context *ot_ctx = otel_ctx.lookup(&pid);
-    struct otel_context new_ctx;
-
-    if (!ot_ctx)
-    {
-        ot_ctx = &new_ctx;
-        ot_ctx->tid = bpf_get_prandom_u32();
-        ot_ctx->tid = (ot_ctx->tid - 1) | (ot_ctx->tid + 1) << 32;
-        e->ptid = 0;
-        e->psid = 0;
-    }
-    else
-    {
-        e->ptid = ot_ctx->tid;
-        e->psid = ot_ctx->sid;
-    }
-
-    ot_ctx->sid = bpf_get_prandom_u32();
-    ot_ctx->sid = (ot_ctx->sid - 1) | (ot_ctx->sid + 1) << 32;
-
-    e->tid = ot_ctx->tid;
-    e->sid = ot_ctx->sid;
-
-    otel_ctx.update(&pid, ot_ctx);
+    updateOtelContext(pid, &(e->ptid), &(e->psid), &(e->tid), &(e->sid));
 
     ring_buf.ringbuf_output(e, sizeof(struct event_process), 0);
 
@@ -757,28 +738,7 @@ int enter_caput(struct pt_regs *ctx, struct link *plink, short dbrType,
     bpf_trace_printk("value=%d", e.val_type);
 
     __u64 pid = bpf_get_current_pid_tgid();
-    struct otel_context *ot_ctx = otel_ctx.lookup(&pid);
-    struct otel_context new_ctx;
-
-    if (!ot_ctx)
-    {
-        ot_ctx = &new_ctx;
-        ot_ctx->tid = bpf_get_prandom_u32();
-        ot_ctx->tid = (ot_ctx->tid - 1) | (ot_ctx->tid + 1) << 32;
-        e.ptid = 0;
-        e.psid = 0;
-    }
-    else
-    {
-        e.ptid = ot_ctx->tid;
-        e.psid = ot_ctx->sid;
-    }
-
-    ot_ctx->sid = bpf_get_prandom_u32();
-    ot_ctx->sid = (ot_ctx->sid - 1) | (ot_ctx->sid + 1) << 32;
-
-    e.tid = ot_ctx->tid;
-    e.sid = ot_ctx->sid;
+    updateOtelContext(pid, &(e.ptid), &(e.psid), &(e.tid), &(e.sid));
 
     caput_pv_hash.update(&pid, &e);
 
